@@ -110,10 +110,25 @@ export async function login(req, res) {
     const { dni, password } = req.body;
     if (!dni || !password) return res.status(400).json({ error: 'Faltan campos: dni, password' });
 
-    // 1) Buscar correo por DNI
+    // 1) Buscar usuario por DNI con join a pacientes
     const { data: usuario, error: uErr } = await supabaseAdmin
       .from('usuarios')
-      .select('*')
+      .select(`
+        id_usuario,
+        dni,
+        correo,
+        rol,
+        creado_en,
+        pacientes (
+          id_paciente,
+          nombre,
+          ape_pat,
+          ape_mat,
+          fecha_nacimiento,
+          telefono,
+          sexo
+        )
+      `)
       .eq('dni', dni)
       .maybeSingle();
 
@@ -136,13 +151,12 @@ export async function login(req, res) {
       return res.status(401).json({ error: 'DNI o contraseña inválidos' });
     }
 
-    // 3) Filtrar la info a devolver
-
+    // 3) Construir respuesta
     return res.json({
       ok: true,
       session: {
         access_token: signInData.session.access_token,
-        refresh_token: signInData.session.refresh_token, // <-- agregado
+        refresh_token: signInData.session.refresh_token,
         expires_in: signInData.session.expires_in
       },
       user: {
@@ -155,7 +169,16 @@ export async function login(req, res) {
         dni: usuario.dni,
         correo: usuario.correo,
         rol: usuario.rol,
-        creado_en: usuario.creado_en
+        creado_en: usuario.creado_en,
+        ...(usuario.rol === 'paciente' ? {
+          id_paciente: usuario.pacientes?.id_paciente,
+          nombre: usuario.pacientes?.nombre,
+          ape_pat: usuario.pacientes?.ape_pat,
+          ape_mat: usuario.pacientes?.ape_mat,
+          fecha_nacimiento: usuario.pacientes?.fecha_nacimiento,
+          telefono: usuario.pacientes?.telefono,
+          sexo: usuario.pacientes?.sexo
+        } : {})
       }
     });
 
@@ -164,6 +187,7 @@ export async function login(req, res) {
     return res.status(500).json({ error: 'Error interno en login' });
   }
 }
+
 
 export async function me(req, res) {
   try {
