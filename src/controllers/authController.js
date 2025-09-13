@@ -1,11 +1,30 @@
 // src/controllers/authController.js
 import { supabaseAdmin, supabaseAnon } from '../supabaseClient.js';
 
+// 👉 Función auxiliar para formatear fecha
+function formatDate(dateStr) {
+  if (!dateStr) return null;
+  const [day, month, year] = dateStr.split('/');
+  return `${year}-${month}-${day}`;
+}
+
 export async function register(req, res) {
   try {
-    const { correo, password, dni, rol } = req.body;
+    const { 
+      correo, 
+      password, 
+      dni, 
+      rol, 
+      nombre, 
+      ape_pat, 
+      ape_mat, 
+      fecha_nacimiento, 
+      telefono, 
+      sexo // 👈 ahora recibimos sexo
+    } = req.body;
+
     if (!correo || !password || !dni || !rol) {
-      return res.status(400).json({ error: 'Faltan campos: correo, password, dni, rol' });
+      return res.status(400).json({ error: 'Faltan campos obligatorios: correo, password, dni, rol' });
     }
 
     // 1) Validar si ya existe un usuario con ese DNI
@@ -23,7 +42,7 @@ export async function register(req, res) {
       return res.status(400).json({ error: 'El DNI ya está registrado' });
     }
 
-    // 2) Crear usuario en Supabase Auth (admin)
+    // 2) Crear usuario en Supabase Auth
     const { data: createData, error: createErr } = await supabaseAdmin.auth.admin.createUser({
       email: correo,
       password,
@@ -41,23 +60,50 @@ export async function register(req, res) {
     }
 
     // 3) Insertar en tabla usuarios
-    const { error: insertErr } = await supabaseAdmin
+    const { data: userRow, error: insertErr } = await supabaseAdmin
       .from('usuarios')
-      .insert([{ auth_id, dni, correo, rol }]);
+      .insert([{ auth_id, dni, correo, rol }])
+      .select()
+      .single();
 
     if (insertErr) {
       console.error('Error insertando en usuarios:', insertErr);
-      // Rollback: borrar al usuario en Auth
-      await supabaseAdmin.auth.admin.deleteUser(auth_id);
+      await supabaseAdmin.auth.admin.deleteUser(auth_id); // rollback
       return res.status(500).json({ error: insertErr.message });
     }
 
-    return res.json({ ok: true, auth_id });
+    // 4) Si es paciente, insertar en tabla pacientes
+    if (rol === 'paciente') {
+      const { error: pacErr } = await supabaseAdmin
+        .from('pacientes')
+        .insert([{
+          id_usuario: userRow.id_usuario,
+          nombre,
+          ape_pat,
+          ape_mat,
+          fecha_nacimiento: formatDate(fecha_nacimiento), // 👈 formateo a yyyy-MM-dd
+          telefono,
+          sexo // 👈 nuevo campo
+        }]);
+
+      if (pacErr) {
+        console.error('Error insertando en pacientes:', pacErr);
+        // rollback: borrar usuario en usuarios y auth
+        await supabaseAdmin.from('usuarios').delete().eq('id_usuario', userRow.id_usuario);
+        await supabaseAdmin.auth.admin.deleteUser(auth_id);
+        return res.status(500).json({ error: pacErr.message });
+      }
+    }
+
+    return res.json({ ok: true, auth_id, id_usuario: userRow.id_usuario });
   } catch (err) {
     console.error('register error', err);
     return res.status(500).json({ error: 'Error interno en register' });
   }
 }
+
+
+
 
 export async function login(req, res) {
   try {
