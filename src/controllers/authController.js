@@ -158,40 +158,75 @@ export async function login(req, res) {
     if (!numero_documento || !password) 
       return res.status(400).json({ error: 'Faltan campos: numero_documento, password' });
 
-    // Buscar usuario por número de documento (ignorar tipo_documento)
-    const { data: usuario, error: uErr } = await supabaseAdmin
-      .from('usuarios')
+    // 1) Buscar paciente por numero_documento (consulta simple)
+    const { data: paciente, error: pErr } = await supabaseAdmin
+      .from('pacientes')
       .select(`
+        id_paciente,
         id_usuario,
-        correo,
-        rol,
-        creado_en,
-        pacientes (
-          id_paciente,
-          numero_documento,
-          tipo_documento,
-          nombre,
-          ape_pat,
-          ape_mat,
-          fecha_nacimiento,
-          telefono,
-          sexo
-        )
+        numero_documento,
+        tipo_documento,
+        nombre,
+        ape_pat,
+        ape_mat,
+        fecha_nacimiento,
+        telefono,
+        sexo
       `)
-      .eq('pacientes.numero_documento', numero_documento)
+      .eq('numero_documento', numero_documento)
+      .limit(1)
       .maybeSingle();
 
-    if (uErr) {
-      console.error('Error buscando usuario:', uErr);
-      return res.status(500).json({ error: 'Error buscando usuario' });
+    if (pErr) {
+      console.error('Error buscando paciente:', pErr);
+      return res.status(500).json({ error: 'Error buscando paciente' });
     }
-    if (!usuario) {
+
+    if (!paciente) {
+      // No existe paciente con ese número
       return res.status(401).json({ error: 'Número de documento o contraseña inválidos' });
     }
 
-    // Login con correo y contraseña usando supabaseAnon
+    // 2) Obtener el correo del usuario asociado (si existe id_usuario)
+    let usuarioRow = null;
+    if (paciente.id_usuario) {
+      const { data: uData, error: uErr } = await supabaseAdmin
+        .from('usuarios')
+        .select('id_usuario, auth_id, correo, rol, creado_en')
+        .eq('id_usuario', paciente.id_usuario)
+        .maybeSingle();
+
+      if (uErr) {
+        console.error('Error obteniendo usuario asociado:', uErr);
+        return res.status(500).json({ error: 'Error buscando usuario' });
+      }
+      usuarioRow = uData;
+    } else {
+      // caso raro: paciente existe pero no tiene id_usuario
+      // opcional: buscar en paciente_usuario por titular/autorizado
+      const { data: rel, error: relErr } = await supabaseAdmin
+        .from('paciente_usuario')
+        .select('id_usuario, rol_relacion, estado, usuarios ( id_usuario, auth_id, correo, rol )')
+        .eq('id_paciente', paciente.id_paciente)
+        .eq('estado', true)
+        .limit(1)
+        .maybeSingle();
+
+      if (relErr) {
+        console.error('Error buscando relacion paciente_usuario:', relErr);
+        return res.status(500).json({ error: 'Error buscando usuario' });
+      }
+      if (rel && rel.usuarios) usuarioRow = rel.usuarios;
+    }
+
+    if (!usuarioRow || !usuarioRow.correo) {
+      console.error('Paciente sin usuario asociado (id_paciente):', paciente.id_paciente);
+      return res.status(400).json({ error: 'No hay un usuario asociado a este paciente' });
+    }
+
+    // 3) Hacer login en Supabase Auth con el correo encontrado
     const { data: signInData, error: signInErr } = await supabaseAnon.auth.signInWithPassword({
-      email: usuario.correo,
+      email: usuarioRow.correo,
       password
     });
 
@@ -200,16 +235,26 @@ export async function login(req, res) {
       return res.status(401).json({ error: 'Número de documento o contraseña inválidos' });
     }
 
+    // 4) Construir la respuesta unificada
+    // obtener usuario completo (para devolver rol, creado_en, id_usuario, etc.)
+    const usuarioParaRespuesta = {
+      id_usuario: usuarioRow.id_usuario,
+      correo: usuarioRow.correo,
+      rol: usuarioRow.rol,
+      creado_en: usuarioRow.creado_en
+    };
+
     return res.json(buildResponse(
-      { ...usuario, id: signInData.user.id, email: signInData.user.email }, 
-      signInData.session, 
-      usuario.rol === 'paciente' ? usuario.pacientes : null
+      { ...usuarioParaRespuesta, id: signInData.user.id, email: signInData.user.email },
+      signInData.session,
+      paciente
     ));
   } catch (err) {
     console.error('login error', err);
     return res.status(500).json({ error: 'Error interno en login' });
   }
 }
+
 
 export async function me(req, res) {
   try {
