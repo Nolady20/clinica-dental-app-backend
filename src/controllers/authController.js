@@ -1,11 +1,47 @@
 // src/controllers/authController.js
 import { supabaseAdmin, supabaseAnon } from '../supabaseClient.js';
 
-// 👉 Función auxiliar para formatear fecha
+// 👉 Función auxiliar para formatear fecha (dd/MM/yyyy → yyyy-MM-dd)
 function formatDate(dateStr) {
   if (!dateStr) return null;
   const [day, month, year] = dateStr.split('/');
   return `${year}-${month}-${day}`;
+}
+
+// 👉 Helper para construir respuesta consistente
+function buildResponse(user, session, paciente = null) {
+  return {
+    ok: true,
+    ...(session ? {
+      session: {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_in: session.expires_in
+      }
+    } : {}),
+    user: {
+      id: user.id,
+      email: user.email,
+      rol: user.rol
+    },
+    profile: {
+      id_usuario: user.id_usuario,
+      correo: user.correo,
+      rol: user.rol,
+      creado_en: user.creado_en,
+      ...(paciente ? {
+        id_paciente: paciente.id_paciente,
+        numero_documento: paciente.numero_documento,
+        tipo_documento: paciente.tipo_documento,
+        nombre: paciente.nombre,
+        ape_pat: paciente.ape_pat,
+        ape_mat: paciente.ape_mat,
+        fecha_nacimiento: paciente.fecha_nacimiento,
+        telefono: paciente.telefono,
+        sexo: paciente.sexo
+      } : {})
+    }
+  };
 }
 
 export async function register(req, res) {
@@ -13,33 +49,35 @@ export async function register(req, res) {
     const { 
       correo, 
       password, 
-      dni, 
+      numero_documento, 
+      tipo_documento = 'DNI', 
       rol, 
       nombre, 
       ape_pat, 
       ape_mat, 
       fecha_nacimiento, 
       telefono, 
-      sexo // 👈 ahora recibimos sexo
+      sexo 
     } = req.body;
 
-    if (!correo || !password || !dni || !rol) {
-      return res.status(400).json({ error: 'Faltan campos obligatorios: correo, password, dni, rol' });
+    if (!correo || !password || !numero_documento || !rol) {
+      return res.status(400).json({ error: 'Faltan campos obligatorios: correo, password, numero_documento, rol' });
     }
 
-    // 1) Validar si ya existe un usuario con ese DNI
-    const { data: usuarioExistente, error: dniErr } = await supabaseAdmin
-      .from('usuarios')
-      .select('id_usuario')
-      .eq('dni', dni)
+    // 1) Validar si ya existe paciente con mismo documento + tipo
+    const { data: pacienteExistente, error: docErr } = await supabaseAdmin
+      .from('pacientes')
+      .select('id_paciente')
+      .eq('numero_documento', numero_documento)
+      .eq('tipo_documento', tipo_documento)
       .maybeSingle();
 
-    if (dniErr) {
-      console.error('Error verificando DNI:', dniErr);
-      return res.status(500).json({ error: 'Error verificando DNI' });
+    if (docErr) {
+      console.error('Error verificando documento:', docErr);
+      return res.status(500).json({ error: 'Error verificando documento' });
     }
-    if (usuarioExistente) {
-      return res.status(400).json({ error: 'El DNI ya está registrado' });
+    if (pacienteExistente) {
+      return res.status(400).json({ error: 'El documento ya está registrado' });
     }
 
     // 2) Crear usuario en Supabase Auth
@@ -62,7 +100,7 @@ export async function register(req, res) {
     // 3) Insertar en tabla usuarios
     const { data: userRow, error: insertErr } = await supabaseAdmin
       .from('usuarios')
-      .insert([{ auth_id, dni, correo, rol }])
+      .insert([{ auth_id, correo, rol }])
       .select()
       .single();
 
@@ -72,19 +110,25 @@ export async function register(req, res) {
       return res.status(500).json({ error: insertErr.message });
     }
 
-    // 4) Si es paciente, insertar en tabla pacientes
+    let pacienteRow = null;
+
+    // 4) Si es paciente, insertar en tabla pacientes y relacionarlo con id_usuario
     if (rol === 'paciente') {
-      const { error: pacErr } = await supabaseAdmin
+      const { data: pacData, error: pacErr } = await supabaseAdmin
         .from('pacientes')
         .insert([{
           id_usuario: userRow.id_usuario,
+          numero_documento,
+          tipo_documento,
           nombre,
           ape_pat,
           ape_mat,
-          fecha_nacimiento: formatDate(fecha_nacimiento), // 👈 formateo a yyyy-MM-dd
+          fecha_nacimiento: formatDate(fecha_nacimiento),
           telefono,
-          sexo // 👈 nuevo campo
-        }]);
+          sexo
+        }])
+        .select()
+        .single();
 
       if (pacErr) {
         console.error('Error insertando en pacientes:', pacErr);
@@ -93,34 +137,39 @@ export async function register(req, res) {
         await supabaseAdmin.auth.admin.deleteUser(auth_id);
         return res.status(500).json({ error: pacErr.message });
       }
+
+      pacienteRow = pacData;
     }
 
-    return res.json({ ok: true, auth_id, id_usuario: userRow.id_usuario });
+    return res.json(buildResponse(
+      { ...userRow, id: auth_id }, 
+      null, 
+      pacienteRow
+    ));
   } catch (err) {
     console.error('register error', err);
     return res.status(500).json({ error: 'Error interno en register' });
   }
 }
 
-
-
-
 export async function login(req, res) {
   try {
-    const { dni, password } = req.body;
-    if (!dni || !password) return res.status(400).json({ error: 'Faltan campos: dni, password' });
+    const { numero_documento, password } = req.body;
+    if (!numero_documento || !password) 
+      return res.status(400).json({ error: 'Faltan campos: numero_documento, password' });
 
-    // 1) Buscar usuario por DNI con join a pacientes
+    // Buscar usuario por número de documento (ignorar tipo_documento)
     const { data: usuario, error: uErr } = await supabaseAdmin
       .from('usuarios')
       .select(`
         id_usuario,
-        dni,
         correo,
         rol,
         creado_en,
         pacientes (
           id_paciente,
+          numero_documento,
+          tipo_documento,
           nombre,
           ape_pat,
           ape_mat,
@@ -129,18 +178,18 @@ export async function login(req, res) {
           sexo
         )
       `)
-      .eq('dni', dni)
+      .eq('pacientes.numero_documento', numero_documento)
       .maybeSingle();
 
     if (uErr) {
-      console.error('Error buscando usuario por dni:', uErr);
+      console.error('Error buscando usuario:', uErr);
       return res.status(500).json({ error: 'Error buscando usuario' });
     }
     if (!usuario) {
-      return res.status(401).json({ error: 'DNI o contraseña inválidos' });
+      return res.status(401).json({ error: 'Número de documento o contraseña inválidos' });
     }
 
-    // 2) Login con correo y contraseña usando supabaseAnon
+    // Login con correo y contraseña usando supabaseAnon
     const { data: signInData, error: signInErr } = await supabaseAnon.auth.signInWithPassword({
       email: usuario.correo,
       password
@@ -148,46 +197,19 @@ export async function login(req, res) {
 
     if (signInErr) {
       console.error('Error en signInWithPassword:', signInErr);
-      return res.status(401).json({ error: 'DNI o contraseña inválidos' });
+      return res.status(401).json({ error: 'Número de documento o contraseña inválidos' });
     }
 
-    // 3) Construir respuesta
-    return res.json({
-      ok: true,
-      session: {
-        access_token: signInData.session.access_token,
-        refresh_token: signInData.session.refresh_token,
-        expires_in: signInData.session.expires_in
-      },
-      user: {
-        id: signInData.user.id,
-        email: signInData.user.email,
-        rol: usuario.rol
-      },
-      profile: {
-        id_usuario: usuario.id_usuario,
-        dni: usuario.dni,
-        correo: usuario.correo,
-        rol: usuario.rol,
-        creado_en: usuario.creado_en,
-        ...(usuario.rol === 'paciente' ? {
-          id_paciente: usuario.pacientes?.id_paciente,
-          nombre: usuario.pacientes?.nombre,
-          ape_pat: usuario.pacientes?.ape_pat,
-          ape_mat: usuario.pacientes?.ape_mat,
-          fecha_nacimiento: usuario.pacientes?.fecha_nacimiento,
-          telefono: usuario.pacientes?.telefono,
-          sexo: usuario.pacientes?.sexo
-        } : {})
-      }
-    });
-
+    return res.json(buildResponse(
+      { ...usuario, id: signInData.user.id, email: signInData.user.email }, 
+      signInData.session, 
+      usuario.rol === 'paciente' ? usuario.pacientes : null
+    ));
   } catch (err) {
     console.error('login error', err);
     return res.status(500).json({ error: 'Error interno en login' });
   }
 }
-
 
 export async function me(req, res) {
   try {
@@ -201,9 +223,26 @@ export async function me(req, res) {
     }
 
     const authUser = userData.user;
+
     const { data: profile, error: profErr } = await supabaseAdmin
       .from('usuarios')
-      .select('*')
+      .select(`
+        id_usuario,
+        correo,
+        rol,
+        creado_en,
+        pacientes (
+          id_paciente,
+          numero_documento,
+          tipo_documento,
+          nombre,
+          ape_pat,
+          ape_mat,
+          fecha_nacimiento,
+          telefono,
+          sexo
+        )
+      `)
       .eq('auth_id', authUser.id)
       .maybeSingle();
 
@@ -211,21 +250,11 @@ export async function me(req, res) {
       return res.status(500).json({ error: 'Error consultando perfil' });
     }
 
-    return res.json({
-      ok: true,
-      user: {
-        id: authUser.id,
-        email: authUser.email,
-        rol: profile.rol
-      },
-      profile: {
-        id_usuario: profile.id_usuario,
-        dni: profile.dni,
-        correo: profile.correo,
-        rol: profile.rol,
-        creado_en: profile.creado_en
-      }
-    });
+    return res.json(buildResponse(
+      { ...profile, id: authUser.id, email: authUser.email }, 
+      null, 
+      profile.rol === 'paciente' ? profile.pacientes : null
+    ));
   } catch (err) {
     console.error('me error', err);
     return res.status(500).json({ error: 'Error interno en me' });
