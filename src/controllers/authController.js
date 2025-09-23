@@ -64,10 +64,10 @@ export async function register(req, res) {
       return res.status(400).json({ error: 'Faltan campos obligatorios: correo, password, numero_documento, rol' });
     }
 
-    // 1) Validar si ya existe paciente con mismo documento + tipo
+    // 1) Verificar si ya existe paciente con ese documento
     const { data: pacienteExistente, error: docErr } = await supabaseAdmin
       .from('pacientes')
-      .select('id_paciente')
+      .select('*')
       .eq('numero_documento', numero_documento)
       .eq('tipo_documento', tipo_documento)
       .maybeSingle();
@@ -76,8 +76,10 @@ export async function register(req, res) {
       console.error('Error verificando documento:', docErr);
       return res.status(500).json({ error: 'Error verificando documento' });
     }
-    if (pacienteExistente) {
-      return res.status(400).json({ error: 'El documento ya está registrado' });
+
+    // Si ya existe y tiene usuario → error
+    if (pacienteExistente && pacienteExistente.id_usuario) {
+      return res.status(400).json({ error: 'El documento ya está registrado con una cuenta' });
     }
 
     // 2) Crear usuario en Supabase Auth
@@ -112,35 +114,85 @@ export async function register(req, res) {
 
     let pacienteRow = null;
 
-    // 4) Si es paciente, insertar en tabla pacientes y relacionarlo con id_usuario
-    if (rol === 'paciente') {
-      const { data: pacData, error: pacErr } = await supabaseAdmin
-        .from('pacientes')
-        .insert([{
-          id_usuario: userRow.id_usuario,
-          numero_documento,
-          tipo_documento,
-          nombre,
-          ape_pat,
-          ape_mat,
-          fecha_nacimiento: formatDate(fecha_nacimiento),
-          telefono,
-          sexo
-        }])
-        .select()
-        .single();
+    // 4) Si es paciente, conectar o crear
+if (rol === 'paciente') {
+  if (pacienteExistente && !pacienteExistente.id_usuario) {
+    // 🔑 Reclamar paciente existente
+    const { data: updated, error: updErr } = await supabaseAdmin
+      .from('pacientes')
+      .update({ id_usuario: userRow.id_usuario })
+      .eq('id_paciente', pacienteExistente.id_paciente)
+      .select()
+      .single();
 
-      if (pacErr) {
-        console.error('Error insertando en pacientes:', pacErr);
-        // rollback: borrar usuario en usuarios y auth
-        await supabaseAdmin.from('usuarios').delete().eq('id_usuario', userRow.id_usuario);
-        await supabaseAdmin.auth.admin.deleteUser(auth_id);
-        return res.status(500).json({ error: pacErr.message });
-      }
-
-      pacienteRow = pacData;
+    if (updErr) {
+      console.error('Error actualizando paciente existente:', updErr);
+      return res.status(500).json({ error: updErr.message });
     }
 
+    // 👉 crear la relación en paciente_usuario
+    const { error: relErr } = await supabaseAdmin
+      .from('paciente_usuario')
+      .insert([{
+        id_paciente: updated.id_paciente,
+        id_usuario: userRow.id_usuario,
+        rol_relacion: 'titular',
+        estado: true
+      }]);
+
+    if (relErr) {
+      console.error('Error creando relación paciente_usuario:', relErr);
+      return res.status(500).json({ error: relErr.message });
+    }
+
+    pacienteRow = updated;
+  } else {
+    // 🆕 Crear nuevo paciente
+    const { data: pacData, error: pacErr } = await supabaseAdmin
+      .from('pacientes')
+      .insert([{
+        id_usuario: userRow.id_usuario,
+        numero_documento,
+        tipo_documento,
+        nombre,
+        ape_pat,
+        ape_mat,
+        fecha_nacimiento: formatDate(fecha_nacimiento),
+        telefono,
+        sexo
+      }])
+      .select()
+      .single();
+
+    if (pacErr) {
+      console.error('Error insertando en pacientes:', pacErr);
+      // rollback
+      await supabaseAdmin.from('usuarios').delete().eq('id_usuario', userRow.id_usuario);
+      await supabaseAdmin.auth.admin.deleteUser(auth_id);
+      return res.status(500).json({ error: pacErr.message });
+    }
+
+    // 👉 crear la relación en paciente_usuario
+    const { error: relErr } = await supabaseAdmin
+      .from('paciente_usuario')
+      .insert([{
+        id_paciente: pacData.id_paciente,
+        id_usuario: userRow.id_usuario,
+        rol_relacion: 'titular',
+        estado: true
+      }]);
+
+    if (relErr) {
+      console.error('Error creando relación paciente_usuario:', relErr);
+      return res.status(500).json({ error: relErr.message });
+    }
+
+    pacienteRow = pacData;
+  }
+}
+
+
+    // 5) Responder
     return res.json(buildResponse(
       { ...userRow, id: auth_id }, 
       null, 
