@@ -37,3 +37,4 @@ export async function authMiddleware(req, res, next) {
     return res.status(500).json({ error: 'Error interno en middleware', detail: err.message });
   }
 }
+  

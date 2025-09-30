@@ -307,7 +307,7 @@ export async function login(req, res) {
   }
 }
 
-
+/*
 export async function me(req, res) {
   try {
     const authHeader = req.headers.authorization || '';
@@ -357,3 +357,194 @@ export async function me(req, res) {
     return res.status(500).json({ error: 'Error interno en me' });
   }
 }
+*/
+
+
+
+/*
+export async function me(req, res) {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.replace('Bearer ', '').trim();
+    if (!token) return res.status(401).json({ error: 'Token no provisto' });
+
+    // 1) Validar token contra Supabase Auth
+    const { data: userData, error: getUserErr } = await supabaseAnon.auth.getUser(token);
+    if (getUserErr || !userData?.user) {
+      return res.status(401).json({ error: 'Token inválido' });
+    }
+
+    const authUser = userData.user;
+
+    // 2) Traer usuario en tabla `usuarios`
+    const { data: usuarioRow, error: usuarioErr } = await supabaseAdmin
+      .from('usuarios')
+      .select('id_usuario, correo, rol, creado_en')
+      .eq('auth_id', authUser.id)
+      .maybeSingle();
+
+    if (usuarioErr || !usuarioRow) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    let pacientes = [];
+
+    // 3) Solo si el rol es paciente → buscar familiares y titular en paciente_usuario
+    if (usuarioRow.rol === 'paciente') {
+      const { data: relaciones, error: relErr } = await supabaseAdmin
+        .from('paciente_usuario')
+        .select(`
+          rol_relacion,
+          estado,
+          pacientes (
+            id_paciente,
+            numero_documento,
+            tipo_documento,
+            nombre,
+            ape_pat,
+            ape_mat,
+            fecha_nacimiento,
+            telefono,
+            sexo
+          )
+        `)
+        .eq('id_usuario', usuarioRow.id_usuario)
+        .eq('estado', true);
+
+      if (relErr) {
+        console.error('Error consultando paciente_usuario:', relErr);
+        return res.status(500).json({ error: 'Error consultando pacientes' });
+      }
+
+      pacientes = (relaciones || []).map(rel => ({
+        ...rel.pacientes,
+        rol_relacion: rel.rol_relacion
+      }));
+    }
+
+    // 4) Responder
+    return res.json({
+      ok: true,
+      user: {
+        id: authUser.id,
+        email: authUser.email,
+        rol: usuarioRow.rol
+      },
+      profile: {
+        id_usuario: usuarioRow.id_usuario,
+        correo: usuarioRow.correo,
+        rol: usuarioRow.rol,
+        creado_en: usuarioRow.creado_en
+      },
+      pacientes
+    });
+  } catch (err) {
+    console.error('me error', err);
+    return res.status(500).json({ error: 'Error interno en me' });
+  }
+}
+
+*/
+
+export async function me(req, res) {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.replace('Bearer ', '').trim();
+    if (!token) return res.status(401).json({ error: 'Token no provisto' });
+
+    // 1) Validar token contra Supabase Auth
+    const { data: userData, error: getUserErr } = await supabaseAnon.auth.getUser(token);
+    if (getUserErr || !userData?.user) {
+      return res.status(401).json({ error: 'Token inválido' });
+    }
+
+    const authUser = userData.user;
+
+    // 2) Traer usuario en tabla `usuarios`
+    const { data: usuarioRow, error: usuarioErr } = await supabaseAdmin
+      .from('usuarios')
+      .select('id_usuario, correo, rol, creado_en')
+      .eq('auth_id', authUser.id)
+      .maybeSingle();
+
+    if (usuarioErr || !usuarioRow) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    let pacientes = [];
+
+    if (usuarioRow.rol === 'paciente') {
+      // 3a) Traer relaciones de paciente_usuario
+      const { data: relaciones, error: relErr } = await supabaseAdmin
+        .from('paciente_usuario')
+        .select(`
+          rol_relacion,
+          estado,
+          pacientes (
+            id_paciente,
+            numero_documento,
+            tipo_documento,
+            nombre,
+            ape_pat,
+            ape_mat,
+            fecha_nacimiento,
+            telefono,
+            sexo
+          )
+        `)
+        .eq('id_usuario', usuarioRow.id_usuario)
+        .eq('estado', true);
+
+      if (relErr) {
+        console.error('Error consultando paciente_usuario:', relErr);
+        return res.status(500).json({ error: 'Error consultando pacientes' });
+      }
+
+      pacientes = (relaciones || []).map(rel => ({
+        ...rel.pacientes,
+        rol_relacion: rel.rol_relacion
+      }));
+
+      // 3b) Traer el paciente titular asociado directamente al usuario
+      const { data: pacienteTitular, error: pacErr } = await supabaseAdmin
+        .from('pacientes')
+        .select('id_paciente, numero_documento, tipo_documento, nombre, ape_pat, ape_mat, fecha_nacimiento, telefono, sexo')
+        .eq('id_usuario', usuarioRow.id_usuario)
+        .maybeSingle();
+
+      if (pacErr) {
+        console.error('Error consultando paciente titular:', pacErr);
+        return res.status(500).json({ error: 'Error consultando paciente titular' });
+      }
+
+      if (pacienteTitular) {
+        pacientes.unshift({   // lo ponemos primero
+          ...pacienteTitular,
+          rol_relacion: 'titular'
+        });
+      }
+    }
+
+    // 4) Responder
+    return res.json({
+      ok: true,
+      user: {
+        id: authUser.id,
+        email: authUser.email,
+        rol: usuarioRow.rol
+      },
+      profile: {
+        id_usuario: usuarioRow.id_usuario,
+        correo: usuarioRow.correo,
+        rol: usuarioRow.rol,
+        creado_en: usuarioRow.creado_en
+      },
+      pacientes
+    });
+  } catch (err) {
+    console.error('me error', err);
+    return res.status(500).json({ error: 'Error interno en me' });
+  }
+}
+
+
