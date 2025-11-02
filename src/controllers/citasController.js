@@ -206,3 +206,104 @@ export async function reprogramarCita(req, res) {
     res.status(500).json({ error: 'Error al reprogramar la cita' });
   }
 }
+
+// Obtener rango de fechas disponibles (hoy + 15 días)
+export async function obtenerFechasDisponibles(req, res) {
+  try {
+    const hoy = new Date(); // fecha actual
+    const fechasDisponibles = [];
+
+    // Generar 15 días (incluyendo hoy)
+    for (let i = 0; i < 15; i++) {
+      const fecha = new Date(hoy);
+      fecha.setDate(hoy.getDate() + i);
+      const formatoISO = fecha.toISOString().split('T')[0]; // YYYY-MM-DD
+      fechasDisponibles.push(formatoISO);
+    }
+
+    return res.json({ ok: true, fechas: fechasDisponibles });
+  } catch (err) {
+    console.error('Error al obtener fechas disponibles:', err);
+    res.status(500).json({ error: 'Error al generar fechas disponibles' });
+  }
+}
+
+// Obtener odontólogos (opcionalmente filtrados por fecha si quieres)
+export async function obtenerDoctores(req, res) {
+  try {
+    // Si quieres filtrar por fecha en el futuro puedes recibir `req.query.fecha`
+    const { data, error } = await supabaseAdmin
+      .from('odontologos')
+      .select('id_odontologo, nombre, especialidad');
+
+    if (error) throw error;
+
+    return res.json({ ok: true, doctores: data });
+  } catch (err) {
+    console.error('obtenerDoctores error', err);
+    res.status(500).json({ error: 'Error al obtener odontólogos' });
+  }
+}
+
+// Obtener horarios disponibles para un odontólogo en una fecha determinada
+export async function obtenerHorariosPorOdontologo(req, res) {
+  try {
+    const id_odontologo = req.params.id;
+    const fecha = req.query.fecha; // YYYY-MM-DD
+
+    if (!fecha) {
+      return res.status(400).json({ error: 'Se requiere fecha (query param)'} );
+    }
+
+    // Definir los posibles slots (mañana/tarde) en formato HH:mm:ss
+    const duracionMinutos = 40;
+    const slotsManana = ['07:00:00','08:00:00','09:00:00','10:00:00','11:00:00'];
+    const slotsTarde  = ['14:00:00','15:00:00','16:00:00','17:00:00'];
+    const candidateSlots = [...slotsManana, ...slotsTarde];
+
+    // Traer citas existentes de ese odontólogo en la fecha
+    const { data: citasExistentes, error } = await supabaseAdmin
+      .from('citas')
+      .select('hora_inicio, hora_fin, estado')
+      .eq('id_odontologo', id_odontologo)
+      .eq('fecha', fecha)
+      .in('estado', ['pendiente', 'confirmada']);
+
+    if (error) throw error;
+
+    // Función para sumar minutos a un time string HH:mm:ss
+    const addMinutes = (timeStr, minutes) => {
+      const [h, m, s] = timeStr.split(':').map(Number);
+      const date = new Date(1970,0,1,h,m,s);
+      date.setMinutes(date.getMinutes() + minutes);
+      const hh = String(date.getHours()).padStart(2,'0');
+      const mm = String(date.getMinutes()).padStart(2,'0');
+      const ss = String(date.getSeconds()).padStart(2,'0');
+      return `${hh}:${mm}:${ss}`;
+    };
+
+    // Función de solapamiento: slot [inicio, fin) se solapa si existe cita tal que
+    // cita.hora_inicio < slotFin && cita.hora_fin > slotInicio
+    const available = candidateSlots.filter(slot => {
+      const slotInicio = slot;
+      const slotFin = addMinutes(slot, duracionMinutos);
+
+      // comprobar contra todas las citas existentes
+      for (const cita of citasExistentes) {
+        const citaInicio = cita.hora_inicio; // HH:mm:ss
+        const citaFin = cita.hora_fin;
+        if ( (citaInicio < slotFin) && (citaFin > slotInicio) ) {
+          // solapa -> slot no disponible
+          return false;
+        }
+      }
+      return true;
+    });
+
+    return res.json({ ok: true, horarios: available });
+  } catch (err) {
+    console.error('obtenerHorariosPorOdontologo error', err);
+    res.status(500).json({ error: 'Error al obtener horarios' });
+  }
+}
+
