@@ -1,56 +1,84 @@
 // src/controllers/citasController.js
 import { supabaseAdmin } from '../supabaseClient.js';
 
-// Crear cita con validación de solapamiento y máximo 1 cita por día
+/* ========================================================
+   🧩 FUNCIONES AUXILIARES
+   ======================================================== */
+function calcularHoraFin(horaInicio, duracionMin = 40) {
+  const horaFin = new Date(`1970-01-01T${horaInicio}`);
+  horaFin.setMinutes(horaFin.getMinutes() + duracionMin);
+  return horaFin.toISOString().substring(11, 19);
+}
+
+function haySolapamientoHorario(citas, horaInicio, horaFin) {
+  return citas.some(cita => {
+    const inicioExistente = new Date(`1970-01-01T${cita.hora_inicio}`);
+    const finExistente = new Date(`1970-01-01T${cita.hora_fin}`);
+    const inicioNueva = new Date(`1970-01-01T${horaInicio}`);
+    const finNueva = new Date(`1970-01-01T${horaFin}`);
+    return inicioExistente < finNueva && finExistente > inicioNueva;
+  });
+}
+
+/* ========================================================
+   🆕 CREAR CITA
+   ======================================================== */
 export async function crearCita(req, res) {
   try {
     const { id_paciente, id_odontologo, fecha, hora_inicio, tipo_cita } = req.body;
 
     if (!id_paciente || !id_odontologo || !fecha || !hora_inicio) {
-      return res.status(400).json({ error: 'Faltan datos obligatorios' });
+      return res.status(400).json({ ok: false, error: 'Faltan datos obligatorios' });
     }
 
-    // Calcular hora_fin (bloque de 40 minutos por defecto)
-    const duracionMinutos = 40; 
-    const horaFinDate = new Date(`1970-01-01T${hora_inicio}`);
-    horaFinDate.setMinutes(horaFinDate.getMinutes() + duracionMinutos);
-    const hora_fin = horaFinDate.toISOString().substring(11, 19); // formato HH:mm:ss
+    const ahora = new Date();
+    const fechaHoraSeleccionada = new Date(`${fecha}T${hora_inicio}`);
+    const diffMin = (fechaHoraSeleccionada - ahora) / (1000 * 60);
 
-    // 🔹 Validar que el paciente no tenga más de 1 cita en ese mismo día
+    if (diffMin < 60) {
+      return res.status(400).json({
+        ok: false,
+        error: 'No puedes reservar citas con menos de 1 hora de anticipación o en horas pasadas'
+      });
+    }
+
+    const hora_fin = calcularHoraFin(hora_inicio);
+
+    // 🔹 Verificar si el paciente ya tiene cita ese día
     const { data: citasPaciente, error: errorPaciente } = await supabaseAdmin
       .from('citas')
       .select('id_cita')
       .eq('id_paciente', id_paciente)
       .eq('fecha', fecha)
-      .in('estado', ['pendiente', 'confirmada']); // solo citas activas
+      .in('estado', ['pendiente', 'confirmada']);
 
     if (errorPaciente) throw errorPaciente;
-
-    if (citasPaciente && citasPaciente.length > 0) {
-      return res.status(409).json({ 
-        error: 'El paciente ya tiene una cita registrada para este día' 
+    if (citasPaciente?.length > 0) {
+      return res.status(409).json({
+        ok: false,
+        error: 'El paciente ya tiene una cita registrada para este día'
       });
     }
 
-    // 🔹 Validar que no exista solapamiento con otra cita del mismo odontólogo
+    // 🔹 Validar solapamiento del odontólogo
     const { data: citasExistentes, error: errorSolapamiento } = await supabaseAdmin
       .from('citas')
-      .select('*')
+      .select('hora_inicio, hora_fin')
       .eq('id_odontologo', id_odontologo)
       .eq('fecha', fecha)
-      .in('estado', ['pendiente', 'confirmada']) // solo citas activas
-      .or(`and(hora_inicio.lt.${hora_fin},hora_fin.gt.${hora_inicio})`);
+      .in('estado', ['pendiente', 'confirmada']);
 
     if (errorSolapamiento) throw errorSolapamiento;
 
-    if (citasExistentes && citasExistentes.length > 0) {
-      return res.status(409).json({ 
-        error: 'El odontólogo ya tiene una cita en ese horario' 
+    if (haySolapamientoHorario(citasExistentes, hora_inicio, hora_fin)) {
+      return res.status(409).json({
+        ok: false,
+        error: 'El odontólogo ya tiene una cita en ese horario'
       });
     }
 
-    // Insertar cita
-    const { data, error } = await supabaseAdmin
+    // 🆕 Crear cita
+    const { data: nuevaCita, error: errorInsert } = await supabaseAdmin
       .from('citas')
       .insert([{
         id_paciente,
@@ -61,207 +89,250 @@ export async function crearCita(req, res) {
         tipo_cita: tipo_cita || 'normal',
         estado: 'pendiente'
       }])
-      .select()
+      .select('*')
       .single();
 
-    if (error) throw error;
+    if (errorInsert) throw errorInsert;
 
-    res.status(201).json({ ok: true, cita: data });
+    // 🧠 Obtener datos de paciente y odontólogo
+    const [{ data: paciente }, { data: odontologo }] = await Promise.all([
+      supabaseAdmin.from('pacientes').select('id_paciente, nombre, apellido').eq('id_paciente', id_paciente).single(),
+      supabaseAdmin.from('odontologos').select('id_odontologo, nombre, especialidad').eq('id_odontologo', id_odontologo).single()
+    ]);
+
+    res.status(201).json({
+      ok: true,
+      mensaje: 'Cita creada exitosamente',
+      cita: {
+        ...nuevaCita,
+        paciente: {
+          id_paciente,
+          nombre_completo: `${paciente?.nombre || ''} ${paciente?.apellido || ''}`.trim()
+        },
+        odontologo: odontologo || null
+      }
+    });
   } catch (err) {
     console.error('crearCita error', err);
-    res.status(500).json({ error: 'Error al crear la cita' });
+    res.status(500).json({ ok: false, error: 'Error interno al crear la cita' });
   }
 }
 
-
-// Obtener citas por paciente
+/* ========================================================
+   🔍 OBTENER CITAS POR PACIENTE
+   ======================================================== */
 export async function obtenerCitasPorPaciente(req, res) {
   try {
     const { id_paciente } = req.params;
-
-    if (!id_paciente) {
-      return res.status(400).json({ error: 'Se requiere id_paciente' });
-    }
+    if (!id_paciente)
+      return res.status(400).json({ ok: false, error: 'Se requiere id_paciente' });
 
     const { data, error } = await supabaseAdmin
       .from('citas')
       .select(`
-        id_cita,
-        fecha,
-        hora_inicio,
-        hora_fin,
-        tipo_cita,
-        estado,
-        odontologos (id_odontologo, nombre, especialidad)
+        id_cita, fecha, hora_inicio, hora_fin, tipo_cita, estado,
+        odontologos (id_odontologo, nombre, especialidad),
+        pacientes (id_paciente, nombre, apellido)
       `)
       .eq('id_paciente', id_paciente)
+      .in('estado', ['pendiente', 'confirmada'])
       .order('fecha', { ascending: true })
       .order('hora_inicio', { ascending: true });
 
     if (error) throw error;
 
-    res.json({ ok: true, citas: data });
+    const citas = (data || []).map(c => ({
+      id_cita: c.id_cita,
+      fecha: c.fecha,
+      hora_inicio: c.hora_inicio,
+      hora_fin: c.hora_fin,
+      tipo_cita: c.tipo_cita,
+      estado: c.estado,
+      odontologo: c.odontologos
+        ? {
+            id_odontologo: c.odontologos.id_odontologo,
+            nombre: c.odontologos.nombre,
+            especialidad: c.odontologos.especialidad
+          }
+        : null,
+      paciente: c.pacientes
+        ? {
+            id_paciente: c.pacientes.id_paciente,
+            nombre_completo: `${c.pacientes.nombre} ${c.pacientes.apellido}`
+          }
+        : null
+    }));
+
+    res.json({
+      ok: true,
+      citas,
+      mensaje: citas.length ? undefined : 'No tienes citas pendientes ni confirmadas'
+    });
   } catch (err) {
     console.error('obtenerCitasPorPaciente error', err);
-    res.status(500).json({ error: 'Error al obtener citas' });
+    res.status(500).json({ ok: false, error: 'Error al obtener citas' });
   }
 }
 
-
-// Reprogramar cita
+/* ========================================================
+   🔁 REPROGRAMAR CITA
+   ======================================================== */
 export async function reprogramarCita(req, res) {
   try {
     const { id_cita } = req.params;
     const { fecha_nueva, hora_nueva, motivo } = req.body;
 
-    if (!fecha_nueva || !hora_nueva) {
-      return res.status(400).json({ error: 'Se requiere fecha_nueva y hora_nueva' });
+    if (!fecha_nueva || !hora_nueva)
+      return res.status(400).json({ ok: false, error: 'Faltan datos para reprogramar' });
+
+    const ahora = new Date();
+    const fechaHoraNueva = new Date(`${fecha_nueva}T${hora_nueva}`);
+    const diffMin = (fechaHoraNueva - ahora) / (1000 * 60);
+    if (diffMin < 60) {
+      return res.status(400).json({
+        ok: false,
+        error: 'No puedes reprogramar a una hora pasada o con menos de 1 hora de anticipación'
+      });
     }
 
-    // 1. Traer cita actual
     const { data: citaActual, error: errorCita } = await supabaseAdmin
       .from('citas')
       .select('*')
       .eq('id_cita', id_cita)
       .single();
 
-    if (errorCita || !citaActual) {
-      return res.status(404).json({ error: 'Cita no encontrada' });
-    }
+    if (errorCita || !citaActual)
+      return res.status(404).json({ ok: false, error: 'Cita no encontrada' });
 
-    const { id_paciente, id_odontologo, fecha: fecha_anterior, hora_inicio: hora_anterior } = citaActual;
+    const hora_fin_nueva = calcularHoraFin(hora_nueva);
 
-    // 2. Calcular nueva hora_fin (40 minutos por defecto)
-    const duracionMinutos = 40;
-    const horaFinDate = new Date(`1970-01-01T${hora_nueva}`);
-    horaFinDate.setMinutes(horaFinDate.getMinutes() + duracionMinutos);
-    const hora_fin_nueva = horaFinDate.toISOString().substring(11, 19);
-
-    // 3. Validar que el paciente no tenga otra cita en el mismo día (excepto esta misma)
-    const { data: citasPaciente, error: errorPaciente } = await supabaseAdmin
+    // Validaciones duplicadas
+    const { data: citasPaciente } = await supabaseAdmin
       .from('citas')
       .select('id_cita')
-      .eq('id_paciente', id_paciente)
+      .eq('id_paciente', citaActual.id_paciente)
       .eq('fecha', fecha_nueva)
       .in('estado', ['pendiente', 'confirmada'])
       .neq('id_cita', id_cita);
 
-    if (errorPaciente) throw errorPaciente;
+    if (citasPaciente?.length > 0)
+      return res.status(409).json({ ok: false, error: 'El paciente ya tiene otra cita ese día' });
 
-    if (citasPaciente && citasPaciente.length > 0) {
-      return res.status(409).json({
-        error: 'El paciente ya tiene otra cita registrada para este día',
-      });
-    }
-
-    // 4. Validar solapamiento con otras citas del odontólogo
-    const { data: citasExistentes, error: errorSolapamiento } = await supabaseAdmin
+    const { data: citasExistentes } = await supabaseAdmin
       .from('citas')
-      .select('*')
-      .eq('id_odontologo', id_odontologo)
+      .select('hora_inicio, hora_fin')
+      .eq('id_odontologo', citaActual.id_odontologo)
       .eq('fecha', fecha_nueva)
       .in('estado', ['pendiente', 'confirmada'])
-      .neq('id_cita', id_cita)
-      .or(`and(hora_inicio.lt.${hora_fin_nueva},hora_fin.gt.${hora_nueva})`);
+      .neq('id_cita', id_cita);
 
-    if (errorSolapamiento) throw errorSolapamiento;
-
-    if (citasExistentes && citasExistentes.length > 0) {
-      return res.status(409).json({
-        error: 'El odontólogo ya tiene otra cita en ese horario',
-      });
+    if (haySolapamientoHorario(citasExistentes, hora_nueva, hora_fin_nueva)) {
+      return res.status(409).json({ ok: false, error: 'El odontólogo ya tiene otra cita en ese horario' });
     }
 
-    // 5. Guardar reprogramación en historial
-    const { error: errorHist } = await supabaseAdmin
-      .from('cita_reprogramaciones')
-      .insert([{
-        id_cita,
-        fecha_anterior,
-        hora_anterior,
-        fecha_nueva,
-        hora_nueva,
-        motivo: motivo || null,
-      }]);
+    await supabaseAdmin.from('cita_reprogramaciones').insert([{
+      id_cita,
+      fecha_anterior: citaActual.fecha,
+      hora_anterior: citaActual.hora_inicio,
+      fecha_nueva,
+      hora_nueva,
+      motivo: motivo || null
+    }]);
 
-    if (errorHist) throw errorHist;
-
-    // 6. Actualizar la cita con nueva fecha y hora
     const { data: citaActualizada, error: errorUpdate } = await supabaseAdmin
       .from('citas')
       .update({
         fecha: fecha_nueva,
         hora_inicio: hora_nueva,
-        hora_fin: hora_fin_nueva,
+        hora_fin: hora_fin_nueva
       })
       .eq('id_cita', id_cita)
-      .select()
+      .select(`
+        id_cita, fecha, hora_inicio, hora_fin, tipo_cita, estado,
+        pacientes (id_paciente, nombre, apellido),
+        odontologos (id_odontologo, nombre, especialidad)
+      `)
       .single();
 
     if (errorUpdate) throw errorUpdate;
 
-    res.json({ ok: true, cita: citaActualizada });
+    res.json({
+      ok: true,
+      mensaje: 'Cita reprogramada exitosamente',
+      cita: {
+        id_cita: citaActualizada.id_cita,
+        fecha: citaActualizada.fecha,
+        hora_inicio: citaActualizada.hora_inicio,
+        hora_fin: citaActualizada.hora_fin,
+        tipo_cita: citaActualizada.tipo_cita,
+        estado: citaActualizada.estado,
+        paciente: {
+          id_paciente: citaActualizada.pacientes.id_paciente,
+          nombre_completo: `${citaActualizada.pacientes.nombre} ${citaActualizada.pacientes.apellido}`
+        },
+        odontologo: citaActualizada.odontologos
+      }
+    });
   } catch (err) {
     console.error('reprogramarCita error', err);
-    res.status(500).json({ error: 'Error al reprogramar la cita' });
+    res.status(500).json({ ok: false, error: 'Error al reprogramar la cita' });
   }
 }
 
-// Obtener rango de fechas disponibles (hoy + 15 días)
+/* ========================================================
+   📅 FECHAS DISPONIBLES
+   ======================================================== */
 export async function obtenerFechasDisponibles(req, res) {
   try {
-    const hoy = new Date(); // fecha actual
-    const fechasDisponibles = [];
-
-    // Generar 15 días (incluyendo hoy)
-    for (let i = 0; i < 15; i++) {
+    const hoy = new Date();
+    const fechas = Array.from({ length: 15 }, (_, i) => {
       const fecha = new Date(hoy);
       fecha.setDate(hoy.getDate() + i);
-      const formatoISO = fecha.toISOString().split('T')[0]; // YYYY-MM-DD
-      fechasDisponibles.push(formatoISO);
-    }
+      return fecha.toISOString().split('T')[0];
+    });
 
-    return res.json({ ok: true, fechas: fechasDisponibles });
+    res.json({ ok: true, fechas });
   } catch (err) {
-    console.error('Error al obtener fechas disponibles:', err);
-    res.status(500).json({ error: 'Error al generar fechas disponibles' });
+    console.error('obtenerFechasDisponibles error', err);
+    res.status(500).json({ ok: false, error: 'Error al generar fechas disponibles' });
   }
 }
 
-// Obtener odontólogos (opcionalmente filtrados por fecha si quieres)
+/* ========================================================
+   🦷 LISTAR DOCTORES
+   ======================================================== */
 export async function obtenerDoctores(req, res) {
   try {
-    // Si quieres filtrar por fecha en el futuro puedes recibir `req.query.fecha`
     const { data, error } = await supabaseAdmin
       .from('odontologos')
       .select('id_odontologo, nombre, especialidad');
 
     if (error) throw error;
-
-    return res.json({ ok: true, doctores: data });
+    res.json({ ok: true, doctores: data });
   } catch (err) {
     console.error('obtenerDoctores error', err);
-    res.status(500).json({ error: 'Error al obtener odontólogos' });
+    res.status(500).json({ ok: false, error: 'Error al obtener odontólogos' });
   }
 }
 
-// Obtener horarios disponibles para un odontólogo en una fecha determinada
+/* ========================================================
+   ⏰ HORARIOS DISPONIBLES
+   ======================================================== */
 export async function obtenerHorariosPorOdontologo(req, res) {
   try {
     const id_odontologo = req.params.id;
-    const fecha = req.query.fecha; // YYYY-MM-DD
+    const { fecha } = req.query;
 
-    if (!fecha) {
-      return res.status(400).json({ error: 'Se requiere fecha (query param)'} );
-    }
+    if (!fecha)
+      return res.status(400).json({ ok: false, error: 'Se requiere parámetro de fecha' });
 
-    // Definir los posibles slots (mañana/tarde) en formato HH:mm:ss
-    const duracionMinutos = 40;
+    const ahora = new Date();
+    const hoyISO = ahora.toISOString().split('T')[0];
+
     const slotsManana = ['07:00:00','08:00:00','09:00:00','10:00:00','11:00:00'];
     const slotsTarde  = ['14:00:00','15:00:00','16:00:00','17:00:00'];
     const candidateSlots = [...slotsManana, ...slotsTarde];
 
-    // Traer citas existentes de ese odontólogo en la fecha
     const { data: citasExistentes, error } = await supabaseAdmin
       .from('citas')
       .select('hora_inicio, hora_fin, estado')
@@ -271,39 +342,93 @@ export async function obtenerHorariosPorOdontologo(req, res) {
 
     if (error) throw error;
 
-    // Función para sumar minutos a un time string HH:mm:ss
-    const addMinutes = (timeStr, minutes) => {
-      const [h, m, s] = timeStr.split(':').map(Number);
-      const date = new Date(1970,0,1,h,m,s);
-      date.setMinutes(date.getMinutes() + minutes);
-      const hh = String(date.getHours()).padStart(2,'0');
-      const mm = String(date.getMinutes()).padStart(2,'0');
-      const ss = String(date.getSeconds()).padStart(2,'0');
-      return `${hh}:${mm}:${ss}`;
-    };
-
-    // Función de solapamiento: slot [inicio, fin) se solapa si existe cita tal que
-    // cita.hora_inicio < slotFin && cita.hora_fin > slotInicio
     const available = candidateSlots.filter(slot => {
-      const slotInicio = slot;
-      const slotFin = addMinutes(slot, duracionMinutos);
-
-      // comprobar contra todas las citas existentes
-      for (const cita of citasExistentes) {
-        const citaInicio = cita.hora_inicio; // HH:mm:ss
-        const citaFin = cita.hora_fin;
-        if ( (citaInicio < slotFin) && (citaFin > slotInicio) ) {
-          // solapa -> slot no disponible
-          return false;
-        }
+      const slotFin = calcularHoraFin(slot);
+      if (fecha === hoyISO) {
+        const diff = (new Date(`1970-01-01T${slot}`) - new Date(`1970-01-01T${ahora.toTimeString().split(' ')[0]}`)) / 60000;
+        if (diff < 60) return false;
       }
-      return true;
+      return !haySolapamientoHorario(citasExistentes, slot, slotFin);
     });
 
-    return res.json({ ok: true, horarios: available });
+    res.json({ ok: true, horarios: available });
   } catch (err) {
     console.error('obtenerHorariosPorOdontologo error', err);
-    res.status(500).json({ error: 'Error al obtener horarios' });
+    res.status(500).json({ ok: false, error: 'Error al obtener horarios disponibles' });
+  }
+}
+
+/* ========================================================
+   🧾 OBTENER CITAS POR USUARIO (TODOS SUS PACIENTES)
+   ======================================================== */
+export async function obtenerCitasPorUsuario(req, res) {
+  try {
+    const { id_usuario } = req.params;
+    if (!id_usuario)
+      return res.status(400).json({ ok: false, error: 'Se requiere id_usuario' });
+
+    // 1️⃣ Buscar los pacientes asociados al usuario
+    const { data: pacientes, error: errorPacientes } = await supabaseAdmin
+      .from('paciente_usuario')
+      .select(`
+        pacientes (id_paciente, nombre)
+      `)
+      .eq('id_usuario', id_usuario);
+
+    if (errorPacientes) throw errorPacientes;
+
+    // Extraer pacientes (Supabase anida los datos)
+    const listaPacientes = pacientes.map(p => p.pacientes);
+
+    if (!listaPacientes || listaPacientes.length === 0) {
+      return res.json({ ok: true, citas: [], mensaje: 'No tienes pacientes registrados' });
+    }
+
+    const idsPacientes = listaPacientes.map(p => p.id_paciente);
+
+    // 2️⃣ Buscar todas las citas de esos pacientes
+    const { data: citas, error: errorCitas } = await supabaseAdmin
+      .from('citas')
+      .select(`
+        id_cita, fecha, hora_inicio, hora_fin, tipo_cita, estado,
+        id_paciente,
+        odontologos (id_odontologo, nombre, especialidad)
+      `)
+      .in('id_paciente', idsPacientes)
+      .in('estado', ['pendiente', 'confirmada'])
+      .order('fecha', { ascending: true })
+      .order('hora_inicio', { ascending: true });
+
+    if (errorCitas) throw errorCitas;
+
+    // 3️⃣ Enlazar cada cita con su paciente
+    const citasConPacientes = citas.map(c => {
+      const paciente = listaPacientes.find(p => p.id_paciente === c.id_paciente);
+      return {
+        id_cita: c.id_cita,
+        fecha: c.fecha,
+        hora_inicio: c.hora_inicio,
+        hora_fin: c.hora_fin,
+        tipo_cita: c.tipo_cita,
+        estado: c.estado,
+        paciente: paciente
+          ? {
+              id_paciente: paciente.id_paciente,
+              nombre_completo: paciente.nombre
+            }
+          : null,
+        odontologo: c.odontologos
+      };
+    });
+
+    res.json({
+      ok: true,
+      citas: citasConPacientes,
+      mensaje: citasConPacientes.length ? undefined : 'No tienes citas pendientes ni confirmadas'
+    });
+  } catch (err) {
+    console.error('obtenerCitasPorUsuario error', err);
+    res.status(500).json({ ok: false, error: 'Error al obtener citas del usuario' });
   }
 }
 
