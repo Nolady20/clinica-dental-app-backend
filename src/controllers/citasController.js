@@ -25,6 +25,7 @@ function haySolapamientoHorario(citas, horaInicio, horaFin) {
    ======================================================== */
 export async function crearCita(req, res) {
   try {
+    console.log('📩 Datos recibidos para crear cita:', req.body);
     const { id_paciente, id_odontologo, fecha, hora_inicio, tipo_cita } = req.body;
 
     if (!id_paciente || !id_odontologo || !fecha || !hora_inicio) {
@@ -86,7 +87,7 @@ export async function crearCita(req, res) {
         fecha,
         hora_inicio,
         hora_fin,
-        tipo_cita: tipo_cita || 'normal',
+        tipo_cita: tipo_cita || 'consulta',
         estado: 'pendiente'
       }])
       .select('*')
@@ -97,7 +98,7 @@ export async function crearCita(req, res) {
     // 🧠 Obtener datos de paciente y odontólogo
     const [{ data: paciente }, { data: odontologo }] = await Promise.all([
       supabaseAdmin.from('pacientes').select('id_paciente, nombre, apellido').eq('id_paciente', id_paciente).single(),
-      supabaseAdmin.from('odontologos').select('id_odontologo, nombre, especialidad').eq('id_odontologo', id_odontologo).single()
+      supabaseAdmin.from('odontologos').select('id_odontologo, nombre, especialidad,sexo').eq('id_odontologo', id_odontologo).single()
     ]);
 
     res.status(201).json({
@@ -131,8 +132,8 @@ export async function obtenerCitasPorPaciente(req, res) {
       .from('citas')
       .select(`
         id_cita, fecha, hora_inicio, hora_fin, tipo_cita, estado,
-        odontologos (id_odontologo, nombre, especialidad),
-        pacientes (id_paciente, nombre, apellido)
+        odontologos (id_odontologo, nombre, especialidad, sexo),
+        pacientes (id_paciente, nombre, ape_pat, ape_mat)
       `)
       .eq('id_paciente', id_paciente)
       .in('estado', ['pendiente', 'confirmada'])
@@ -152,13 +153,14 @@ export async function obtenerCitasPorPaciente(req, res) {
         ? {
             id_odontologo: c.odontologos.id_odontologo,
             nombre: c.odontologos.nombre,
-            especialidad: c.odontologos.especialidad
+            especialidad: c.odontologos.especialidad,
+            sexo: c.odontologos.sexo
           }
         : null,
       paciente: c.pacientes
         ? {
             id_paciente: c.pacientes.id_paciente,
-            nombre_completo: `${c.pacientes.nombre} ${c.pacientes.apellido}`
+            nombre_completo: `${c.pacientes.nombre} ${c.pacientes.ape_pat} ${c.pacientes.ape_mat}`.trim()
           }
         : null
     }));
@@ -173,6 +175,7 @@ export async function obtenerCitasPorPaciente(req, res) {
     res.status(500).json({ ok: false, error: 'Error al obtener citas' });
   }
 }
+
 
 /* ========================================================
    🔁 REPROGRAMAR CITA
@@ -250,7 +253,7 @@ export async function reprogramarCita(req, res) {
       .select(`
         id_cita, fecha, hora_inicio, hora_fin, tipo_cita, estado,
         pacientes (id_paciente, nombre, apellido),
-        odontologos (id_odontologo, nombre, especialidad)
+        odontologos (id_odontologo, nombre, especialidad,sexo)
       `)
       .single();
 
@@ -305,7 +308,7 @@ export async function obtenerDoctores(req, res) {
   try {
     const { data, error } = await supabaseAdmin
       .from('odontologos')
-      .select('id_odontologo, nombre, especialidad');
+      .select('id_odontologo, nombre, especialidad, sexo');
 
     if (error) throw error;
     res.json({ ok: true, doctores: data });
@@ -392,7 +395,7 @@ export async function obtenerCitasPorUsuario(req, res) {
       .select(`
         id_cita, fecha, hora_inicio, hora_fin, tipo_cita, estado,
         id_paciente,
-        odontologos (id_odontologo, nombre, especialidad)
+        odontologos (id_odontologo, nombre, especialidad, sexo)
       `)
       .in('id_paciente', idsPacientes)
       .in('estado', ['pendiente', 'confirmada'])
