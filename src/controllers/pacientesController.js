@@ -344,8 +344,8 @@ export async function actualizarPaciente(req, res) {
     if (!relacion) return res.status(403).json({ error: 'No tienes acceso a este paciente' });
 
     // Solo permitir editar si es titular
-    if (relacion.rol_relacion !== 'titular')
-      return res.status(403).json({ error: 'Solo el titular puede editar los datos del paciente' });
+    //if (relacion.rol_relacion !== 'titular')
+      //return res.status(403).json({ error: 'Solo el titular puede editar los datos del paciente' });
 
     const campos = (({
       nombre, ape_pat, ape_mat, fecha_nacimiento, telefono, direccion, sexo
