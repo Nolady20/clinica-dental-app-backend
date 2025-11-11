@@ -348,9 +348,9 @@ export async function actualizarPaciente(req, res) {
       //return res.status(403).json({ error: 'Solo el titular puede editar los datos del paciente' });
 
     const campos = (({
-      nombre, ape_pat, ape_mat, fecha_nacimiento, telefono, direccion, sexo
+      nombre, ape_pat, ape_mat,numero_documento, fecha_nacimiento, telefono, direccion, sexo
     }) => ({
-      nombre, ape_pat, ape_mat, fecha_nacimiento, telefono, direccion, sexo
+      nombre, ape_pat, ape_mat,numero_documento, fecha_nacimiento, telefono, direccion, sexo
     }))(req.body);
 
     const { data, error } = await supabaseAdmin
