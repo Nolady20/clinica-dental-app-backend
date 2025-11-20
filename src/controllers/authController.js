@@ -1,5 +1,10 @@
 // src/controllers/authController.js
 import { supabaseAdmin, supabaseAnon } from '../supabaseClient.js';
+import crypto from "crypto";
+
+import { sendEmail } from "../utils/email.js";
+
+
 
 // 👉 Función auxiliar para formatear fecha (dd/MM/yyyy → yyyy-MM-dd)
 function formatDate(dateStr) {
@@ -547,4 +552,140 @@ export async function me(req, res) {
   }
 }
 
+
+export async function resetPassword(req, res) {
+  try {
+    const { correo, numero_documento } = req.body;
+
+    // 1) Determinar email real del usuario
+    let emailToSend = correo;
+
+    if (!emailToSend && numero_documento) {
+      // Buscar usuario por dni → pacientes → usuario
+      const { data, error } = await supabaseAdmin
+        .from("pacientes")
+        .select(`
+          id_paciente,
+          paciente_usuario (
+            usuarios ( correo )
+          )
+        `)
+        .eq("dni", numero_documento)
+        .maybeSingle();
+
+      if (error || !data || !data.paciente_usuario?.length) {
+        return res.status(400).json({ error: "No se encontró un usuario asociado" });
+      }
+
+      emailToSend = data.paciente_usuario[0].usuarios.correo;
+    }
+
+    // 2) Generar OTP de 6 dígitos
+    const codigo = (Math.floor(100000 + Math.random() * 900000)).toString();
+
+    // 3) Guardarlo en Supabase
+    const { error: insertErr } = await supabaseAdmin
+      .from("password_reset_codes")
+      .insert({
+        email: emailToSend,
+        codigo
+      });
+
+    if (insertErr) {
+      console.error("insertErr:", insertErr);
+      return res.status(500).json({ error: "No se pudo generar el código" });
+    }
+
+    // 4) Enviar correo
+await sendEmail({
+  to: emailToSend,
+  subject: "Código de recuperación",
+  html: `
+    <h2>Recuperación de contraseña</h2>
+    <p>Tu código es:</p>
+    <h1 style="font-size:32px; letter-spacing:4px;">${codigo}</h1>
+    <p>Este código expira en 10 minutos.</p>
+  `
+});
+
+    return res.json({
+      ok: true,
+      message: "Código enviado al email"
+    });
+
+  } catch (err) {
+    console.error("resetPassword error general:", err);
+    return res.status(500).json({ error: "Error interno" });
+  }
+}
+
+export async function verifyOtpAndChangePassword(req, res) {
+  try {
+    const { email, codigo, nueva_contrasena } = req.body;
+
+    if (!email || !codigo || !nueva_contrasena) {
+      return res.status(400).json({ error: "Faltan datos" });
+    }
+
+    // Buscar OTP válido
+    const { data: otpData, error: otpErr } = await supabaseAdmin
+      .from("password_reset_codes")
+      .select("*")
+      .eq("email", email)
+      .eq("codigo", codigo)
+      .eq("usado", false)
+      .order("creado_en", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (otpErr || !otpData) {
+      return res.status(400).json({ error: "Código inválido" });
+    }
+
+    // Verificar expiración (10 min)
+    const creadoEn = new Date(otpData.creado_en);
+    const ahora = new Date();
+    const diffMin = (ahora - creadoEn) / 1000 / 60;
+
+    if (diffMin > 10) {
+      return res.status(400).json({ error: "Código expirado" });
+    }
+
+    // Buscar usuario por email en usuarios
+    const { data: userDB, error: userErr } = await supabaseAdmin
+      .from("usuarios")
+      .select("auth_id")
+      .eq("correo", email)
+      .maybeSingle();
+
+    if (userErr || !userDB) {
+      return res.status(400).json({ error: "Usuario no encontrado" });
+    }
+
+    const authId = userDB.auth_id;
+
+    // 🔹 Actualizar contraseña con Supabase Admin (SERVICE ROLE KEY)
+    const { data: updateData, error: updateErr } =
+      await supabaseAdmin.auth.admin.updateUserById(authId, {
+        password: nueva_contrasena
+      });
+
+    if (updateErr) {
+      console.error("updateErr:", updateErr);
+      return res.status(500).json({ error: "No se pudo actualizar la contraseña" });
+    }
+
+    // Marcar código como usado
+    await supabaseAdmin
+      .from("password_reset_codes")
+      .update({ usado: true })
+      .eq("id", otpData.id);
+
+    return res.json({ ok: true, message: "Contraseña actualizada" });
+
+  } catch (err) {
+    console.error("verifyOtpAndChangePassword error:", err);
+    return res.status(500).json({ error: "Error interno" });
+  }
+}
 
