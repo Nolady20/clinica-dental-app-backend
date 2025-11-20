@@ -22,10 +22,6 @@ app.use('/citas', citasRoutes);
 app.use('/pacientes', pacientesRoutes);
 
 
-app.get('/ping', (req, res) => {
-  res.json({ message: "pong" });
-});
-
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server corriendo en http://0.0.0.0:${PORT}`);
 });

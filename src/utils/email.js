@@ -1,26 +1,18 @@
-import nodemailer from "nodemailer";
+import sgMail from "@sendgrid/mail";
 
-export const mailer = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: process.env.SMTP_PORT,
-  secure: false, // Gmail con puerto 465 siempre usa secure=true
-  requireTLS: true,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  }
-});
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 export async function sendEmail({ to, subject, html }) {
   try {
-    const info = await mailer.sendMail({
-      from: `"Clinica Dental" <${process.env.SMTP_USER}>`,
+    const msg = {
       to,
+      from: process.env.FROM_EMAIL,
       subject,
-      html
-    });
+      html,
+    };
 
-    console.log("📨 Email enviado:", info.messageId);
+    await sgMail.send(msg);
+    console.log("📨 Email enviado a:", to);
     return true;
 
   } catch (err) {
