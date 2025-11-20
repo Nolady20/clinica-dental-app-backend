@@ -3,7 +3,8 @@ import nodemailer from "nodemailer";
 export const mailer = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: process.env.SMTP_PORT,
-  secure: true, // Gmail con puerto 465 siempre usa secure=true
+  secure: false, // Gmail con puerto 465 siempre usa secure=true
+  requireTLS: true,
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS
