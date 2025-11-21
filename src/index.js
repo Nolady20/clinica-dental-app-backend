@@ -6,6 +6,8 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes.js';
 import citasRoutes from './routes/citasRoutes.js';
 import pacientesRoutes from './routes/pacientesRoutes.js';
+import tratamientosRoutes from './routes/tratamientosRoutes.js';
+
 
 dotenv.config();
 const app = express();
@@ -20,6 +22,8 @@ app.get('/', (req, res) => res.send('SAIDENT backend OK'));
 app.use('/auth', authRoutes);
 app.use('/citas', citasRoutes);
 app.use('/pacientes', pacientesRoutes);
+app.use('/tratamientos', tratamientosRoutes);
+
 
 
 app.listen(PORT, '0.0.0.0', () => {
