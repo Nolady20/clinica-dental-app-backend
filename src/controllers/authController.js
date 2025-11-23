@@ -561,7 +561,6 @@ export async function resetPassword(req, res) {
     let emailToSend = correo;
 
     if (!emailToSend && numero_documento) {
-      // Buscar usuario por dni → pacientes → usuario
       const { data, error } = await supabaseAdmin
         .from("pacientes")
         .select(`
@@ -596,17 +595,62 @@ export async function resetPassword(req, res) {
       return res.status(500).json({ error: "No se pudo generar el código" });
     }
 
-    // 4) Enviar correo
-await sendEmail({
-  to: emailToSend,
-  subject: "Código de recuperación",
-  html: `
-    <h2>Recuperación de contraseña</h2>
-    <p>Tu código es:</p>
-    <h1 style="font-size:32px; letter-spacing:4px;">${codigo}</h1>
-    <p>Este código expira en 10 minutos.</p>
-  `
-});
+    /* ========================================================
+       🖼️ Logo cargado desde Supabase Storage
+       ======================================================== */
+
+    const logoURL = "https://gqzmibsyfmyrjlxqfxed.supabase.co/storage/v1/object/public/assets/image_10.png";
+    // ⚠️ Reemplaza por la URL real cuando subas tu logo
+
+
+    /* ========================================================
+       📧 4) Enviar correo con diseño profesional
+       ======================================================== */
+
+    const htmlEmail = `
+      <div style="font-family: Arial, sans-serif; background:#f6f9fc; padding: 30px;">
+        <div style="max-width: 520px; margin: auto; background:#ffffff; border-radius: 15px; 
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 30px;">
+
+          <div style="text-align:center; margin-bottom:20px;">
+            <img src="${logoURL}" alt="SaiDent" style="width:120px; border-radius:12px;" />
+          </div>
+
+          <h2 style="color:#2545B8; text-align:center; margin-top:0;">
+            🔐 Recuperación de Contraseña
+          </h2>
+
+          <p style="font-size:16px; color:#333; text-align:center;">
+            Hemos recibido una solicitud para restablecer tu contraseña.
+          </p>
+
+          <p style="font-size:15px; color:#555; text-align:center;">
+            Usa el siguiente código para continuar con el proceso:
+          </p>
+
+          <div style="background:#f0f4ff; border-left:4px solid #2545B8; padding:20px; 
+                      border-radius:8px; text-align:center; margin:25px 0;">
+            <p style="font-size:28px; letter-spacing:6px; margin:0; color:#2545B8;">
+              <strong>${codigo}</strong>
+            </p>
+          </div>
+
+          <p style="font-size:14px; color:#666; text-align:center;">
+            Este código expira en <strong>10 minutos</strong>.
+          </p>
+
+          <p style="margin-top:30px; font-size:13px; color:#999; text-align:center;">
+            SaiDent © 2025 · Gestión Odontológica
+          </p>
+        </div>
+      </div>
+    `;
+
+    await sendEmail({
+      to: emailToSend,
+      subject: "Tu código de recuperación 🔐",
+      html: htmlEmail
+    });
 
     return res.json({
       ok: true,
@@ -618,6 +662,7 @@ await sendEmail({
     return res.status(500).json({ error: "Error interno" });
   }
 }
+
 
 export async function verifyOtpAndChangePassword(req, res) {
   try {

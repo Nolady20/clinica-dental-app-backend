@@ -1,5 +1,8 @@
 // src/controllers/citasController.js
 import { supabaseAdmin } from '../supabaseClient.js';
+import fs from "fs";
+import path from "path";
+import { sendEmail } from "../utils/email.js";
 
 /* ========================================================
    🧩 FUNCIONES AUXILIARES
@@ -23,6 +26,7 @@ function haySolapamientoHorario(citas, horaInicio, horaFin) {
 /* ========================================================
    🆕 CREAR CITA
    ======================================================== */
+
 export async function crearCita(req, res) {
   try {
     console.log('📩 Datos recibidos para crear cita:', req.body);
@@ -97,13 +101,104 @@ export async function crearCita(req, res) {
 
     // 🧠 Obtener datos de paciente y odontólogo
     const [{ data: paciente }, { data: odontologo }] = await Promise.all([
-      supabaseAdmin.from('pacientes').select('id_paciente, nombre, apellido').eq('id_paciente', id_paciente).single(),
-      supabaseAdmin.from('odontologos').select('id_odontologo, nombre, especialidad,sexo').eq('id_odontologo', id_odontologo).single()
+      supabaseAdmin.from('pacientes')
+        .select('id_paciente, nombre, apellido')
+        .eq('id_paciente', id_paciente)
+        .single(),
+
+      supabaseAdmin.from('odontologos')
+        .select('id_odontologo, nombre, especialidad, sexo')
+        .eq('id_odontologo', id_odontologo)
+        .single()
     ]);
+
+    /* ========================================================
+       📧 ENVIAR CORREO DE CONFIRMACIÓN
+       ======================================================== */
+
+    // 🔗 Logo desde Supabase Storage
+    const logoURL = "URL_PUBLICA_DEL_LOGO"; // Reemplazar por la URL final
+
+    // Buscar correo del paciente
+    const { data: relacion } = await supabaseAdmin
+      .from('paciente_usuario')
+      .select('id_usuario')
+      .eq('id_paciente', id_paciente)
+      .single();
+
+    let correoDestino = null;
+
+    if (relacion) {
+      const { data: usuario } = await supabaseAdmin
+        .from('usuarios')
+        .select('correo')
+        .eq('id_usuario', relacion.id_usuario)
+        .single();
+
+      correoDestino = usuario?.correo || null;
+    }
+
+    if (correoDestino) {
+      const nombrePaciente = `${paciente?.nombre || ""} ${paciente?.apellido || ""}`.trim();
+      const nombreOdontologo = odontologo?.nombre || "Tu odontólogo";
+
+      const htmlEmail = `
+      <div style="font-family: Arial, sans-serif; background:#f6f9fc; padding: 30px;">
+        <div style="max-width: 520px; margin: auto; background:#ffffff; border-radius: 15px; 
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 30px;">
+
+          <div style="text-align:center; margin-bottom:20px;">
+            <img src="${logoURL}" alt="SaiDent" style="width:120px; border-radius:12px;" />
+          </div>
+
+          <h2 style="color:#2545B8; text-align:center; margin-top:0;">
+            🦷 Confirmación de Cita
+          </h2>
+
+          <p style="font-size:16px; color:#333;">
+            Hola <strong>${nombrePaciente}</strong>,
+          </p>
+
+          <p style="font-size:15px; color:#555;">
+            Tu cita ha sido <strong>registrada exitosamente</strong>.  
+            Aquí tienes los detalles:
+          </p>
+
+          <div style="background:#f0f4ff; border-left:4px solid #2545B8; padding:15px 20px; 
+                      border-radius:6px; margin:20px 0;">
+            <p style="margin:0; font-size:15px; color:#333;">
+              <strong>🗓 Fecha:</strong> ${fecha}<br>
+              <strong>⏰ Hora:</strong> ${hora_inicio}<br>
+              <strong>👨‍⚕️ Odontólogo:</strong> ${nombreOdontologo}<br>
+              <strong>🏷 Tipo:</strong> ${tipo_cita || 'consulta'}
+            </p>
+          </div>
+
+          <p style="font-size:15px; color:#555;">
+            Te esperamos en SaiDent. Si deseas reprogramar tu cita, puedes hacerlo desde tu app.
+          </p>
+
+          <p style="margin-top:30px; font-size:13px; color:#999; text-align:center;">
+            SaiDent © 2025 · Gestión Odontológica
+          </p>
+        </div>
+      </div>
+      `;
+
+      await sendEmail({
+        to: correoDestino,
+        subject: "Tu cita ha sido registrada ✔",
+        html: htmlEmail
+      });
+    }
+
+    /* ========================================================
+       RESPUESTA FINAL
+       ======================================================== */
 
     res.status(201).json({
       ok: true,
-      mensaje: 'Cita creada exitosamente',
+      mensaje: 'Cita creada exitosamente (correo enviado)',
       cita: {
         ...nuevaCita,
         paciente: {
@@ -113,11 +208,13 @@ export async function crearCita(req, res) {
         odontologo: odontologo || null
       }
     });
+
   } catch (err) {
     console.error('crearCita error', err);
     res.status(500).json({ ok: false, error: 'Error interno al crear la cita' });
   }
 }
+
 
 /* ========================================================
    🔍 OBTENER CITAS POR PACIENTE
@@ -178,12 +275,13 @@ export async function obtenerCitasPorPaciente(req, res) {
 
 
 /* ========================================================
-   🔁 REPROGRAMAR CITA
+   🔁 REPROGRAMAR CITA (Con correo profesional + logo SaiDent)
    ======================================================== */
+
 export async function reprogramarCita(req, res) {
   try {
     const { id_cita } = req.params;
-    const { fecha_nueva, hora_nueva, motivo } = req.body;
+    const { fecha_nueva, hora_nueva, motivo, id_odontologo_nuevo } = req.body;
 
     if (!fecha_nueva || !hora_nueva)
       return res.status(400).json({ ok: false, error: 'Faltan datos para reprogramar' });
@@ -198,40 +296,79 @@ export async function reprogramarCita(req, res) {
       });
     }
 
+    // 1️⃣ Obtener la cita actual
     const { data: citaActual, error: errorCita } = await supabaseAdmin
       .from('citas')
       .select('*')
       .eq('id_cita', id_cita)
       .single();
 
-    if (errorCita || !citaActual)
+    if (!citaActual)
       return res.status(404).json({ ok: false, error: 'Cita no encontrada' });
+
+    if (citaActual.estado !== 'pendiente') {
+      return res.status(409).json({ ok: false, error: 'Solo puedes reprogramar citas pendientes' });
+    }
 
     const hora_fin_nueva = calcularHoraFin(hora_nueva);
 
-    // Validaciones duplicadas
-    const { data: citasPaciente } = await supabaseAdmin
-      .from('citas')
-      .select('id_cita')
-      .eq('id_paciente', citaActual.id_paciente)
-      .eq('fecha', fecha_nueva)
-      .in('estado', ['pendiente', 'confirmada'])
-      .neq('id_cita', id_cita);
+    // Doctor actual
+    const odontologoAnterior = citaActual.id_odontologo;
+    let odontologoElegido = odontologoAnterior;
 
-    if (citasPaciente?.length > 0)
-      return res.status(409).json({ ok: false, error: 'El paciente ya tiene otra cita ese día' });
+    /* ========================================================
+       🦷 2️⃣ Cambio de odontólogo (opcional)
+       ======================================================== */
+    if (id_odontologo_nuevo && id_odontologo_nuevo != odontologoAnterior) {
 
+      // Validar que exista
+      const { data: existsNuevo } = await supabaseAdmin
+        .from("odontologos")
+        .select("id_odontologo")
+        .eq("id_odontologo", id_odontologo_nuevo)
+        .single();
+
+      if (!existsNuevo)
+        return res.status(404).json({ ok: false, error: "El odontólogo nuevo no existe" });
+
+      odontologoElegido = id_odontologo_nuevo;
+    }
+
+    /* ========================================================
+       3️⃣ Validar conflicto CON EL DOCTOR ELEGIDO
+       ======================================================== */
     const { data: citasExistentes } = await supabaseAdmin
       .from('citas')
       .select('hora_inicio, hora_fin')
-      .eq('id_odontologo', citaActual.id_odontologo)
+      .eq('id_odontologo', odontologoElegido)
       .eq('fecha', fecha_nueva)
       .in('estado', ['pendiente', 'confirmada'])
       .neq('id_cita', id_cita);
 
     if (haySolapamientoHorario(citasExistentes, hora_nueva, hora_fin_nueva)) {
-      return res.status(409).json({ ok: false, error: 'El odontólogo ya tiene otra cita en ese horario' });
+      return res.status(409).json({
+        ok: false,
+        error: 'El odontólogo seleccionado ya tiene una cita en ese horario'
+      });
     }
+
+    /* ========================================================
+       4️⃣ Validar que el paciente no tenga otra cita ese día
+       ======================================================== */
+    const { data: citasPaciente } = await supabaseAdmin
+      .from('citas')
+      .select('id_cita')
+      .eq('id_paciente', citaActual.id_paciente)
+      .eq('fecha', fecha_nueva)
+      .neq('id_cita', id_cita)
+      .in('estado', ['pendiente', 'confirmada']);
+
+    if (citasPaciente?.length > 0)
+      return res.status(409).json({ ok: false, error: 'El paciente ya tiene otra cita ese día' });
+
+    /* ========================================================
+       5️⃣ Registrar reprogramación (con doctor anterior/nuevo)
+       ======================================================== */
 
     await supabaseAdmin.from('cita_reprogramaciones').insert([{
       id_cita,
@@ -239,46 +376,135 @@ export async function reprogramarCita(req, res) {
       hora_anterior: citaActual.hora_inicio,
       fecha_nueva,
       hora_nueva,
-      motivo: motivo || null
+      motivo: motivo || null,
+      id_odontologo_anterior: odontologoAnterior,
+      id_odontologo_nuevo: odontologoElegido
     }]);
+
+    /* ========================================================
+       6️⃣ Actualizar la cita
+       ======================================================== */
 
     const { data: citaActualizada, error: errorUpdate } = await supabaseAdmin
       .from('citas')
       .update({
         fecha: fecha_nueva,
         hora_inicio: hora_nueva,
-        hora_fin: hora_fin_nueva
+        hora_fin: hora_fin_nueva,
+        id_odontologo: odontologoElegido
       })
       .eq('id_cita', id_cita)
       .select(`
-        id_cita, fecha, hora_inicio, hora_fin, tipo_cita, estado,
-        pacientes (id_paciente, nombre, apellido),
-        odontologos (id_odontologo, nombre, especialidad,sexo)
+        *,
+        pacientes(id_paciente, nombre),
+        odontologos(id_odontologo, nombre)
       `)
       .single();
 
     if (errorUpdate) throw errorUpdate;
 
+    /* ========================================================
+       🖼️ 7️⃣ Cargar imagen del logo como attachment inline CID
+       ======================================================== */
+
+    const logoPath = path.resolve("src/utils/image_10.png");
+    const logoBase64 = fs.readFileSync(logoPath).toString("base64");
+
+    /* ========================================================
+       8️⃣ Obtener correo del paciente
+       ======================================================== */
+
+    const { data: relacion } = await supabaseAdmin
+      .from('paciente_usuario')
+      .select('id_usuario')
+      .eq('id_paciente', citaActual.id_paciente)
+      .single();
+
+    let correoDestino = null;
+
+    if (relacion) {
+      const { data: usuario } = await supabaseAdmin
+        .from('usuarios')
+        .select('correo')
+        .eq('id_usuario', relacion.id_usuario)
+        .single();
+
+      correoDestino = usuario?.correo || null;
+    }
+
+    /* ========================================================
+       9️⃣ ENVIAR CORREO
+       ======================================================== */
+
+    if (correoDestino) {
+
+      const htmlEmail = `
+      <div style="font-family: Arial, sans-serif; background:#f6f9fc; padding: 30px;">
+        <div style="max-width: 520px; margin: auto; background:#ffffff; border-radius: 15px; 
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 30px;">
+
+          <div style="text-align:center; margin-bottom:20px;">
+            <img src="https://gqzmibsyfmyrjlxqfxed.supabase.co/storage/v1/object/public/assets/image_10.png" 
+     style="width:120px; border-radius:12px;" 
+     alt="SaiDent" />
+
+          </div>
+
+          <h2 style="color:#2545B8; text-align:center; margin-top:0;">
+            🦷 Reprogramación de tu Cita
+          </h2>
+
+          <p style="font-size:16px; color:#333;">Hola <strong>${citaActualizada.pacientes?.nombre}</strong>,</p>
+
+          <p style="font-size:15px; color:#555;">
+            Tu cita ha sido <strong>reprogramada exitosamente</strong>. Aquí los detalles:
+          </p>
+
+          <div style="background:#f0f4ff; border-left:4px solid #2545B8; padding:15px 20px;
+                      border-radius:6px; margin:20px 0;">
+            <p style="margin:0; font-size:15px; color:#333;">
+              <strong>🗓 Nueva Fecha:</strong> ${fecha_nueva}<br>
+              <strong>⏰ Nueva Hora:</strong> ${hora_nueva}<br>
+              <strong>👨‍⚕️ Odontólogo:</strong> ${citaActualizada.odontologos?.nombre}
+            </p>
+          </div>
+
+          <p style="font-size:15px; color:#555;">
+            Si no solicitaste este cambio, contáctanos inmediatamente.
+          </p>
+
+          <p style="margin-top:30px; font-size:13px; color:#999; text-align:center;">
+            SaiDent © 2025 · Gestión Odontológica
+          </p>
+        </div>
+      </div>`;
+
+      await sendEmail({
+        to: correoDestino,
+        subject: "Tu cita ha sido reprogramada ✔",
+        html: htmlEmail,
+        // Attachment inline:
+        attachments: [
+          {
+            content: logoBase64,
+            filename: "logo.png",
+            type: "image/png",
+            disposition: "inline",
+            content_id: "logo_saident"
+          }
+        ]
+      });
+    }
+
     res.json({
       ok: true,
-      mensaje: 'Cita reprogramada exitosamente',
-      cita: {
-        id_cita: citaActualizada.id_cita,
-        fecha: citaActualizada.fecha,
-        hora_inicio: citaActualizada.hora_inicio,
-        hora_fin: citaActualizada.hora_fin,
-        tipo_cita: citaActualizada.tipo_cita,
-        estado: citaActualizada.estado,
-        paciente: {
-          id_paciente: citaActualizada.pacientes.id_paciente,
-          nombre_completo: `${citaActualizada.pacientes.nombre} ${citaActualizada.pacientes.apellido}`
-        },
-        odontologo: citaActualizada.odontologos
-      }
+      mensaje: "Cita reprogramada exitosamente (correo enviado)",
+      cita: citaActualizada
     });
+
   } catch (err) {
-    console.error('reprogramarCita error', err);
-    res.status(500).json({ ok: false, error: 'Error al reprogramar la cita' });
+    console.error("reprogramarCita error", err);
+    res.status(500).json({ ok: false, error: "Error al reprogramar la cita" });
   }
 }
 
