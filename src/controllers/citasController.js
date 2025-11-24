@@ -47,6 +47,7 @@ export async function crearCita(req, res) {
       });
     }
 
+
     const hora_fin = calcularHoraFin(hora_inicio);
 
     // 🔹 Verificar si el paciente ya tiene cita ese día
@@ -295,6 +296,23 @@ export async function reprogramarCita(req, res) {
         error: 'No puedes reprogramar a una hora pasada o con menos de 1 hora de anticipación'
       });
     }
+
+    /* ========================================================
+   🚫 Validar que no pueda reprogramar más de 14 días 
+   ======================================================== */
+const hoy = new Date();
+const fechaLimite = new Date();
+fechaLimite.setDate(hoy.getDate() + 14);
+
+const fechaNuevaDate = new Date(`${fecha_nueva}T${hora_nueva}`);
+
+if (fechaNuevaDate > fechaLimite) {
+  return res.status(400).json({
+    ok: false,
+    error: "Solo puedes reprogramar con un máximo de 2 semanas de anticipación"
+  });
+}
+
 
     // 1️⃣ Obtener la cita actual
     const { data: citaActual, error: errorCita } = await supabaseAdmin
@@ -599,9 +617,9 @@ export async function obtenerCitasPorUsuario(req, res) {
     // 1️⃣ Buscar los pacientes asociados al usuario
     const { data: pacientes, error: errorPacientes } = await supabaseAdmin
       .from('paciente_usuario')
-      .select(`
-        pacientes (id_paciente, nombre)
-      `)
+.select(`
+  pacientes (id_paciente, nombre, ape_pat, ape_mat)
+`)
       .eq('id_usuario', id_usuario);
 
     if (errorPacientes) throw errorPacientes;
@@ -643,7 +661,7 @@ export async function obtenerCitasPorUsuario(req, res) {
         paciente: paciente
           ? {
               id_paciente: paciente.id_paciente,
-              nombre_completo: paciente.nombre
+              nombre_completo: `${paciente.nombre} ${paciente.ape_pat} ${paciente.ape_mat}`.trim()
             }
           : null,
         odontologo: c.odontologos
