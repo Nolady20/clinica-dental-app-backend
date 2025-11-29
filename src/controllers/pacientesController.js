@@ -419,8 +419,10 @@ export async function obtenerPacientePorId(req, res) {
   try {
     const { id_paciente } = req.params;
     const authUser = req.user;
-    if (!authUser?.id) return res.status(401).json({ error: 'Usuario no autenticado' });
+    if (!authUser?.id)
+      return res.status(401).json({ error: 'Usuario no autenticado' });
 
+    // Obtener id_usuario interno
     const { data: usuarioRow } = await supabaseAdmin
       .from('usuarios')
       .select('id_usuario')
@@ -428,7 +430,8 @@ export async function obtenerPacientePorId(req, res) {
       .maybeSingle();
 
     const id_usuario = usuarioRow?.id_usuario;
-    if (!id_usuario) return res.status(400).json({ error: 'Usuario no encontrado' });
+    if (!id_usuario)
+      return res.status(400).json({ error: 'Usuario no encontrado' });
 
     // Verificar relación
     const { data: relacion } = await supabaseAdmin
@@ -439,20 +442,116 @@ export async function obtenerPacientePorId(req, res) {
       .eq('estado', true)
       .maybeSingle();
 
-    if (!relacion) return res.status(403).json({ error: 'No tienes acceso a este paciente' });
+    if (!relacion)
+      return res.status(403).json({ error: 'No tienes acceso a este paciente' });
 
-    // Obtener datos del paciente
-    const { data, error } = await supabaseAdmin
+    // Obtener paciente
+    const { data: paciente } = await supabaseAdmin
       .from('pacientes')
       .select('*')
       .eq('id_paciente', id_paciente)
       .maybeSingle();
 
-    if (error) throw error;
+    // Estadísticas de citas
+    const { count: asistidas } = await supabaseAdmin
+      .from('citas')
+      .select('*', { count: 'exact', head: true })
+      .eq('id_paciente', id_paciente)
+      .eq('estado', 'completada');
 
-    res.json({ ok: true, paciente: data });
+    const { count: pendientes } = await supabaseAdmin
+      .from('citas')
+      .select('*', { count: 'exact', head: true })
+      .eq('id_paciente', id_paciente)
+      .in('estado', ['pendiente', 'confirmada']);
+
+    const { count: canceladas } = await supabaseAdmin
+      .from('citas')
+      .select('*', { count: 'exact', head: true })
+      .eq('id_paciente', id_paciente)
+      .eq('estado', 'cancelada');
+
+    // ===============================
+    //  HISTORIAL CORRECTO FINAL
+    // ===============================
+    const { data: historialRaw, error: histErr } = await supabaseAdmin
+      .from('historial')
+      .select(`
+        id_historial,
+        diagnostico,
+        observaciones,
+        creado_en,
+        citas (
+          id_cita,
+          fecha,
+          hora_inicio,
+          hora_fin,
+          odontologos (
+            id_odontologo,
+            nombre,
+            especialidad
+          ),
+          tratamiento_paciente (
+            tratamientos (
+              id_tratamiento,
+              nombre
+            )
+          )
+        )
+      `)
+      .eq('id_paciente', id_paciente)
+      .order('creado_en', { ascending: false });
+
+    if (histErr) throw histErr;
+
+    // ===============================
+    //  MAPEO CORRECTO DEL TRATAMIENTO
+    // ===============================
+    const historial = (historialRaw ?? []).map(h => {
+      const tratamiento =
+        h.citas?.tratamiento_paciente?.tratamientos || null;
+
+      return {
+        id_historial: h.id_historial,
+        diagnostico: h.diagnostico,
+        observaciones: h.observaciones,
+        creado_en: h.creado_en,
+        cita: h.citas
+          ? {
+              id_cita: h.citas.id_cita,
+              fecha: h.citas.fecha,
+              hora_inicio: h.citas.hora_inicio,
+              hora_fin: h.citas.hora_fin,
+              odontologo: h.citas.odontologos,
+              tratamiento // <--- AHORA SÍ ES CORRECTO
+            }
+          : null
+      };
+    });
+
+    res.json({
+      ok: true,
+      paciente,
+      citas_asistidas: asistidas,
+      citas_pendientes: pendientes,
+      citas_canceladas: canceladas,
+      historial
+    });
+
   } catch (err) {
     console.error('obtenerPacientePorId error', err);
-    res.status(500).json({ error: 'Error al obtener paciente', detail: err.message });
+    res.status(500).json({
+      error: 'Error al obtener paciente',
+      detail: err.message
+    });
   }
 }
+
+
+
+
+
+
+
+
+

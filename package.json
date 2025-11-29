@@ -13,13 +13,21 @@
   "description": "",
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
-    "@supabase/supabase-js": "^2.57.4",
+    "@supabase/supabase-js": "^2.86.0",
     "cors": "^2.8.5",
-    "dotenv": "^17.2.2",
+    "dotenv": "^17.2.3",
     "express": "^5.1.0",
-    "nodemailer": "^7.0.10"
+    "nodemailer": "^7.0.11"
   },
   "devDependencies": {
-    "nodemon": "^3.1.10"
-  }
+    "nodemon": "^3.1.11"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nolady20/clinica-dental-app-backend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Nolady20/clinica-dental-app-backend/issues"
+  },
+  "homepage": "https://github.com/Nolady20/clinica-dental-app-backend#readme"
 }
