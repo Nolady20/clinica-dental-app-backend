@@ -1,10 +1,7 @@
 // src/controllers/authController.js
 import { supabaseAdmin, supabaseAnon } from '../supabaseClient.js';
-import crypto from "crypto";
 
 import { sendEmail } from "../utils/email.js";
-
-
 
 // 👉 Función auxiliar para formatear fecha (dd/MM/yyyy → yyyy-MM-dd)
 function formatDate(dateStr) {
@@ -312,8 +309,6 @@ export async function login(req, res) {
   }
 }
 
-
-
 export async function me(req, res) {
   try {
     const authHeader = req.headers.authorization || '';
@@ -414,7 +409,6 @@ export async function me(req, res) {
     return res.status(500).json({ error: 'Error interno en me' });
   }
 }
-
 
 export async function resetPassword(req, res) {
   try {

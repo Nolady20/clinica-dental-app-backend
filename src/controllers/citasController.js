@@ -29,13 +29,30 @@ function haySolapamientoHorario(citas, horaInicio, horaFin) {
 
 export async function crearCita(req, res) {
   try {
-    console.log('📩 Datos recibidos para crear cita:', req.body);
-    const { id_paciente, id_odontologo, fecha, hora_inicio, tipo_cita } = req.body;
+    console.log("📩 Datos recibidos para crear cita:", req.body);
 
+    const {
+      id_paciente,
+      id_odontologo,
+      fecha,
+      hora_inicio,
+      tipo_cita = "consulta",
+      id_tratamiento_paciente // 🆕 solo si es cita de tratamiento
+    } = req.body;
+
+    /* ========================================================
+       1️⃣ Validar campos base
+    ======================================================== */
     if (!id_paciente || !id_odontologo || !fecha || !hora_inicio) {
-      return res.status(400).json({ ok: false, error: 'Faltan datos obligatorios' });
+      return res.status(400).json({
+        ok: false,
+        error: "Faltan datos obligatorios"
+      });
     }
 
+    /* ========================================================
+       2️⃣ Validar anticipación mínima 1 hora
+    ======================================================== */
     const ahora = new Date();
     const fechaHoraSeleccionada = new Date(`${fecha}T${hora_inicio}`);
     const diffMin = (fechaHoraSeleccionada - ahora) / (1000 * 60);
@@ -43,147 +60,179 @@ export async function crearCita(req, res) {
     if (diffMin < 60) {
       return res.status(400).json({
         ok: false,
-        error: 'No puedes reservar citas con menos de 1 hora de anticipación o en horas pasadas'
+        error: "No puedes reservar citas con menos de 1 hora de anticipación o en horas pasadas"
       });
     }
 
-
+    /* ========================================================
+       3️⃣ Calcular hora fin
+    ======================================================== */
     const hora_fin = calcularHoraFin(hora_inicio);
 
-    // 🔹 Verificar si el paciente ya tiene cita ese día
+    /* ========================================================
+       4️⃣ Validar que el paciente no tenga otra cita ese día
+    ======================================================== */
     const { data: citasPaciente, error: errorPaciente } = await supabaseAdmin
-      .from('citas')
-      .select('id_cita')
-      .eq('id_paciente', id_paciente)
-      .eq('fecha', fecha)
-      .in('estado', ['pendiente', 'confirmada']);
+      .from("citas")
+      .select("id_cita")
+      .eq("id_paciente", id_paciente)
+      .eq("fecha", fecha)
+      .in("estado", ["pendiente", "confirmada"]);
 
     if (errorPaciente) throw errorPaciente;
+
     if (citasPaciente?.length > 0) {
       return res.status(409).json({
         ok: false,
-        error: 'El paciente ya tiene una cita registrada para este día'
+        error: "El paciente ya tiene una cita registrada para este día"
       });
     }
 
-    // 🔹 Validar solapamiento del odontólogo
+    /* ========================================================
+       5️⃣ Validación de tratamiento (solo si tipo_cita = tratamiento)
+    ======================================================== */
+    if (tipo_cita === "tratamiento") {
+      if (!id_tratamiento_paciente) {
+        return res.status(400).json({
+          ok: false,
+          error: "Debes seleccionar un tratamiento para esta cita."
+        });
+      }
+
+      const { data: tratamiento, error: errorTrat } = await supabaseAdmin
+        .from("tratamiento_paciente")
+        .select("id_paciente, estado")
+        .eq("id_tratamiento_paciente", id_tratamiento_paciente)
+        .single();
+
+      if (errorTrat) throw errorTrat;
+
+      if (!tratamiento) {
+        return res.status(404).json({
+          ok: false,
+          error: "El tratamiento seleccionado no existe."
+        });
+      }
+
+      if (tratamiento.id_paciente != id_paciente) {
+        return res.status(403).json({
+          ok: false,
+          error: "Este tratamiento no pertenece al paciente seleccionado."
+        });
+      }
+
+      if (tratamiento.estado !== "en_progreso") {
+        return res.status(400).json({
+          ok: false,
+          error: "El tratamiento seleccionado no está en progreso."
+        });
+      }
+    }
+
+    /* ========================================================
+       6️⃣ Validar solapamiento del odontólogo
+    ======================================================== */
     const { data: citasExistentes, error: errorSolapamiento } = await supabaseAdmin
-      .from('citas')
-      .select('hora_inicio, hora_fin')
-      .eq('id_odontologo', id_odontologo)
-      .eq('fecha', fecha)
-      .in('estado', ['pendiente', 'confirmada']);
+      .from("citas")
+      .select("hora_inicio, hora_fin")
+      .eq("id_odontologo", id_odontologo)
+      .eq("fecha", fecha)
+      .in("estado", ["pendiente", "confirmada"]);
 
     if (errorSolapamiento) throw errorSolapamiento;
 
     if (haySolapamientoHorario(citasExistentes, hora_inicio, hora_fin)) {
       return res.status(409).json({
         ok: false,
-        error: 'El odontólogo ya tiene una cita en ese horario'
+        error: "El odontólogo ya tiene una cita en ese horario"
       });
     }
 
-    // 🆕 Crear cita
+    /* ========================================================
+       7️⃣ Insertar cita (consulta o tratamiento)
+    ======================================================== */
     const { data: nuevaCita, error: errorInsert } = await supabaseAdmin
-      .from('citas')
-      .insert([{
-        id_paciente,
-        id_odontologo,
-        fecha,
-        hora_inicio,
-        hora_fin,
-        tipo_cita: tipo_cita || 'consulta',
-        estado: 'pendiente'
-      }])
-      .select('*')
+      .from("citas")
+      .insert([
+        {
+          id_paciente,
+          id_odontologo,
+          fecha,
+          hora_inicio,
+          hora_fin,
+          tipo_cita,
+          estado: "pendiente",
+          id_tratamiento_paciente:
+            tipo_cita === "tratamiento" ? id_tratamiento_paciente : null
+        }
+      ])
+      .select("*")
       .single();
 
     if (errorInsert) throw errorInsert;
 
-    // 🧠 Obtener datos de paciente y odontólogo
+    /* ========================================================
+       8️⃣ Obtener datos de paciente y odontólogo
+    ======================================================== */
     const [{ data: paciente }, { data: odontologo }] = await Promise.all([
-      supabaseAdmin.from('pacientes')
-        .select('id_paciente, nombre, apellido')
-        .eq('id_paciente', id_paciente)
+      supabaseAdmin
+        .from("pacientes")
+        .select("id_paciente, nombre, ape_pat, ape_mat")
+        .eq("id_paciente", id_paciente)
         .single(),
 
-      supabaseAdmin.from('odontologos')
-        .select('id_odontologo, nombre, especialidad, sexo')
-        .eq('id_odontologo', id_odontologo)
+      supabaseAdmin
+        .from("odontologos")
+        .select("id_odontologo, nombre, especialidad, sexo")
+        .eq("id_odontologo", id_odontologo)
         .single()
     ]);
 
     /* ========================================================
-       📧 ENVIAR CORREO DE CONFIRMACIÓN
-       ======================================================== */
-
-    // 🔗 Logo desde Supabase Storage
-    const logoURL = "URL_PUBLICA_DEL_LOGO"; // Reemplazar por la URL final
-
-    // Buscar correo del paciente
+       9️⃣ Buscar correo del usuario vinculado al paciente
+    ======================================================== */
     const { data: relacion } = await supabaseAdmin
-      .from('paciente_usuario')
-      .select('id_usuario')
-      .eq('id_paciente', id_paciente)
+      .from("paciente_usuario")
+      .select("id_usuario")
+      .eq("id_paciente", id_paciente)
       .single();
 
     let correoDestino = null;
 
     if (relacion) {
       const { data: usuario } = await supabaseAdmin
-        .from('usuarios')
-        .select('correo')
-        .eq('id_usuario', relacion.id_usuario)
+        .from("usuarios")
+        .select("correo")
+        .eq("id_usuario", relacion.id_usuario)
         .single();
 
       correoDestino = usuario?.correo || null;
     }
 
+    /* ========================================================
+       🔟 Enviar correo de confirmación (si existe correo)
+    ======================================================== */
     if (correoDestino) {
-      const nombrePaciente = `${paciente?.nombre || ""} ${paciente?.apellido || ""}`.trim();
+      const nombrePaciente = `${paciente?.nombre || ""} ${paciente?.ape_pat || ""}`.trim();
       const nombreOdontologo = odontologo?.nombre || "Tu odontólogo";
 
       const htmlEmail = `
-      <div style="font-family: Arial, sans-serif; background:#f6f9fc; padding: 30px;">
-        <div style="max-width: 520px; margin: auto; background:#ffffff; border-radius: 15px; 
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 30px;">
+        <div style="font-family: Arial; background:#f6f9fc; padding: 30px;">
+          <div style="max-width: 520px; margin: auto; background:#ffffff; border-radius: 15px;
+                      box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 30px;">
 
-          <div style="text-align:center; margin-bottom:20px;">
-            <img src="${logoURL}" alt="SaiDent" style="width:120px; border-radius:12px;" />
+            <h2 style="color:#2545B8; text-align:center; margin-top:0;">🦷 Confirmación de Cita</h2>
+
+            <p>Hola <strong>${nombrePaciente}</strong>, tu cita ha sido registrada:</p>
+
+            <p><strong>📅 Fecha:</strong> ${fecha}<br>
+            <strong>⏰ Hora:</strong> ${hora_inicio}<br>
+            <strong>👨‍⚕️ Odontólogo:</strong> ${nombreOdontologo}<br>
+            <strong>🏷 Tipo:</strong> ${tipo_cita}</p>
+
+            <p>Te esperamos en SaiDent.</p>
           </div>
-
-          <h2 style="color:#2545B8; text-align:center; margin-top:0;">
-            🦷 Confirmación de Cita
-          </h2>
-
-          <p style="font-size:16px; color:#333;">
-            Hola <strong>${nombrePaciente}</strong>,
-          </p>
-
-          <p style="font-size:15px; color:#555;">
-            Tu cita ha sido <strong>registrada exitosamente</strong>.  
-            Aquí tienes los detalles:
-          </p>
-
-          <div style="background:#f0f4ff; border-left:4px solid #2545B8; padding:15px 20px; 
-                      border-radius:6px; margin:20px 0;">
-            <p style="margin:0; font-size:15px; color:#333;">
-              <strong>🗓 Fecha:</strong> ${fecha}<br>
-              <strong>⏰ Hora:</strong> ${hora_inicio}<br>
-              <strong>👨‍⚕️ Odontólogo:</strong> ${nombreOdontologo}<br>
-              <strong>🏷 Tipo:</strong> ${tipo_cita || 'consulta'}
-            </p>
-          </div>
-
-          <p style="font-size:15px; color:#555;">
-            Te esperamos en SaiDent. Si deseas reprogramar tu cita, puedes hacerlo desde tu app.
-          </p>
-
-          <p style="margin-top:30px; font-size:13px; color:#999; text-align:center;">
-            SaiDent © 2025 · Gestión Odontológica
-          </p>
         </div>
-      </div>
       `;
 
       await sendEmail({
@@ -194,25 +243,28 @@ export async function crearCita(req, res) {
     }
 
     /* ========================================================
-       RESPUESTA FINAL
-       ======================================================== */
+       🔥 RESPUESTA FINAL
+    ======================================================== */
 
     res.status(201).json({
       ok: true,
-      mensaje: 'Cita creada exitosamente (correo enviado)',
+      mensaje: "Cita creada exitosamente (correo enviado)",
       cita: {
         ...nuevaCita,
         paciente: {
           id_paciente,
-          nombre_completo: `${paciente?.nombre || ''} ${paciente?.apellido || ''}`.trim()
+          nombre_completo: `${paciente?.nombre || ""} ${paciente?.ape_pat || ""} ${paciente?.ape_mat || ""}`.trim()
         },
-        odontologo: odontologo || null
+        odontologo
       }
     });
 
   } catch (err) {
-    console.error('crearCita error', err);
-    res.status(500).json({ ok: false, error: 'Error interno al crear la cita' });
+    console.error("crearCita error", err);
+    res.status(500).json({
+      ok: false,
+      error: "Error interno al crear la cita"
+    });
   }
 }
 
@@ -680,3 +732,41 @@ export async function obtenerCitasPorUsuario(req, res) {
 }
 
 
+/* ========================================================
+   🦷 LISTAR TRATAMIENTOS EN PROGRESO DE UN PACIENTE
+   ======================================================== */
+export async function obtenerTratamientosEnProgreso(req, res) {
+  try {
+    const { id_paciente } = req.params;
+
+    if (!id_paciente)
+      return res.status(400).json({ ok: false, error: "Falta id_paciente" });
+
+    const { data, error } = await supabaseAdmin
+      .from("tratamiento_paciente")
+      .select(`
+        id_tratamiento_paciente,
+        estado,
+        fecha_inicio,
+        tratamientos (
+          id_tratamiento,
+          nombre,
+          descripcion,
+          costo
+        )
+      `)
+      .eq("id_paciente", id_paciente)
+      .eq("estado", "en_progreso");
+
+    if (error) throw error;
+
+    return res.json({
+      ok: true,
+      tratamientos: data
+    });
+
+  } catch (err) {
+    console.error("obtenerTratamientosEnProgreso error", err);
+    res.status(500).json({ ok: false, error: "Error al obtener tratamientos" });
+  }
+}
