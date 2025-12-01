@@ -273,7 +273,6 @@ export async function claimPaciente(req, res) {
 }
 
 
-
 // Obtener todos los pacientes relacionados a un usuario
 export async function obtenerPacientesDeUsuario(req, res) {
   try {
@@ -320,43 +319,60 @@ export async function actualizarPaciente(req, res) {
   try {
     const { id_paciente } = req.params;
     const authUser = req.user;
-    if (!authUser?.id) return res.status(401).json({ error: 'Usuario no autenticado' });
 
-    // Buscar id_usuario interno
+    if (!authUser?.id)
+      return res.status(401).json({ error: "Usuario no autenticado" });
+
+    // Obtener id_usuario interno
     const { data: usuarioRow } = await supabaseAdmin
-      .from('usuarios')
-      .select('id_usuario')
-      .eq('auth_id', authUser.id)
+      .from("usuarios")
+      .select("id_usuario")
+      .eq("auth_id", authUser.id)
       .maybeSingle();
 
-    if (!usuarioRow) return res.status(400).json({ error: 'Usuario no encontrado' });
+    if (!usuarioRow)
+      return res.status(400).json({ error: "Usuario no encontrado" });
+
     const id_usuario = usuarioRow.id_usuario;
 
-    // Verificar que el usuario tenga relación con ese paciente
+    // Verificar que el usuario esté asociado a este paciente
     const { data: relacion } = await supabaseAdmin
-      .from('paciente_usuario')
-      .select('rol_relacion')
-      .eq('id_usuario', id_usuario)
-      .eq('id_paciente', id_paciente)
-      .eq('estado', true)
+      .from("paciente_usuario")
+      .select("id")
+      .eq("id_usuario", id_usuario)
+      .eq("id_paciente", id_paciente)
+      .eq("estado", true)
       .maybeSingle();
 
-    if (!relacion) return res.status(403).json({ error: 'No tienes acceso a este paciente' });
+    if (!relacion)
+      return res.status(403).json({ error: "No tienes acceso a este paciente" });
 
-    // Solo permitir editar si es titular
-    //if (relacion.rol_relacion !== 'titular')
-      //return res.status(403).json({ error: 'Solo el titular puede editar los datos del paciente' });
+    // Campos permitidos
+    const {
+      nombre,
+      ape_pat,
+      ape_mat,
+      fecha_nacimiento,
+      telefono,
+      direccion,
+      sexo,
+    } = req.body;
 
-    const campos = (({
-      nombre, ape_pat, ape_mat,numero_documento, fecha_nacimiento, telefono, direccion, sexo
-    }) => ({
-      nombre, ape_pat, ape_mat,numero_documento, fecha_nacimiento, telefono, direccion, sexo
-    }))(req.body);
+    const campos = {
+      ...(nombre && { nombre }),
+      ...(ape_pat && { ape_pat }),
+      ...(ape_mat && { ape_mat }),
+      ...(fecha_nacimiento && { fecha_nacimiento }),
+      ...(telefono && { telefono }),
+      ...(direccion && { direccion }),
+      ...(sexo && { sexo }),
+    };
 
+    // Actualizar datos
     const { data, error } = await supabaseAdmin
-      .from('pacientes')
+      .from("pacientes")
       .update(campos)
-      .eq('id_paciente', id_paciente)
+      .eq("id_paciente", id_paciente)
       .select()
       .single();
 
@@ -364,10 +380,14 @@ export async function actualizarPaciente(req, res) {
 
     res.json({ ok: true, paciente: data });
   } catch (err) {
-    console.error('actualizarPaciente error', err);
-    res.status(500).json({ error: 'Error al actualizar paciente', detail: err.message });
+    console.error("Error en actualizarPaciente:", err);
+    res.status(500).json({
+      error: "Error al actualizar paciente",
+      detail: err.message,
+    });
   }
 }
+
 
 
 
@@ -419,64 +439,76 @@ export async function obtenerPacientePorId(req, res) {
   try {
     const { id_paciente } = req.params;
     const authUser = req.user;
-    if (!authUser?.id)
-      return res.status(401).json({ error: 'Usuario no autenticado' });
 
-    // Obtener id_usuario interno
-    const { data: usuarioRow } = await supabaseAdmin
-      .from('usuarios')
-      .select('id_usuario')
-      .eq('auth_id', authUser.id)
+    if (!authUser?.id) {
+      return res.status(401).json({ error: "Usuario no autenticado" });
+    }
+
+    // 1) Buscar id_usuario interno
+    const { data: usuarioRow, error: usuarioErr } = await supabaseAdmin
+      .from("usuarios")
+      .select("id_usuario")
+      .eq("auth_id", authUser.id)
       .maybeSingle();
 
-    const id_usuario = usuarioRow?.id_usuario;
-    if (!id_usuario)
-      return res.status(400).json({ error: 'Usuario no encontrado' });
+    if (usuarioErr) throw usuarioErr;
+    if (!usuarioRow)
+      return res.status(400).json({ error: "Usuario no encontrado" });
 
-    // Verificar relación
-    const { data: relacion } = await supabaseAdmin
-      .from('paciente_usuario')
-      .select('id')
-      .eq('id_paciente', id_paciente)
-      .eq('id_usuario', id_usuario)
-      .eq('estado', true)
+    const id_usuario = usuarioRow.id_usuario;
+
+    // 2) Verificar relación usuario-paciente
+    const { data: relacion, error: relErr } = await supabaseAdmin
+      .from("paciente_usuario")
+      .select("rol_relacion, estado")
+      .eq("id_usuario", id_usuario)
+      .eq("id_paciente", id_paciente)
+      .eq("estado", true)
       .maybeSingle();
 
-    if (!relacion)
-      return res.status(403).json({ error: 'No tienes acceso a este paciente' });
+    if (relErr) throw relErr;
 
-    // Obtener paciente
-    const { data: paciente } = await supabaseAdmin
-      .from('pacientes')
-      .select('*')
-      .eq('id_paciente', id_paciente)
+    if (!relacion) {
+      return res
+        .status(403)
+        .json({ error: "No tienes acceso a este paciente" });
+    }
+
+    // 3) Obtener datos del paciente
+    const { data: paciente, error: pacErr } = await supabaseAdmin
+      .from("pacientes")
+      .select("*")
+      .eq("id_paciente", id_paciente)
       .maybeSingle();
 
-    // Estadísticas de citas
+    if (pacErr) throw pacErr;
+    if (!paciente)
+      return res.status(404).json({ error: "Paciente no encontrado" });
+
+    // 4) Contadores de citas
     const { count: asistidas } = await supabaseAdmin
-      .from('citas')
-      .select('*', { count: 'exact', head: true })
-      .eq('id_paciente', id_paciente)
-      .eq('estado', 'completada');
+      .from("citas")
+      .select("*", { count: "exact", head: true })
+      .eq("id_paciente", id_paciente)
+      .eq("estado", "completada");
 
     const { count: pendientes } = await supabaseAdmin
-      .from('citas')
-      .select('*', { count: 'exact', head: true })
-      .eq('id_paciente', id_paciente)
-      .in('estado', ['pendiente', 'confirmada']);
+      .from("citas")
+      .select("*", { count: "exact", head: true })
+      .eq("id_paciente", id_paciente)
+      .eq("estado", "pendiente");
 
     const { count: canceladas } = await supabaseAdmin
-      .from('citas')
-      .select('*', { count: 'exact', head: true })
-      .eq('id_paciente', id_paciente)
-      .eq('estado', 'cancelada');
+      .from("citas")
+      .select("*", { count: "exact", head: true })
+      .eq("id_paciente", id_paciente)
+      .eq("estado", "cancelada");
 
-    // ===============================
-    //  HISTORIAL CORRECTO FINAL
-    // ===============================
+    // 5) Historial clínico
     const { data: historialRaw, error: histErr } = await supabaseAdmin
-      .from('historial')
-      .select(`
+      .from("historial")
+      .select(
+        `
         id_historial,
         diagnostico,
         observaciones,
@@ -498,54 +530,57 @@ export async function obtenerPacientePorId(req, res) {
             )
           )
         )
-      `)
-      .eq('id_paciente', id_paciente)
-      .order('creado_en', { ascending: false });
+      `
+      )
+      .eq("id_paciente", id_paciente)
+      .order("creado_en", { ascending: false });
 
     if (histErr) throw histErr;
 
-    // ===============================
-    //  MAPEO CORRECTO DEL TRATAMIENTO
-    // ===============================
-    const historial = (historialRaw ?? []).map(h => {
-      const tratamiento =
-        h.citas?.tratamiento_paciente?.tratamientos || null;
+    const historial = (historialRaw ?? []).map((h) => ({
+      id_historial: h.id_historial,
+      diagnostico: h.diagnostico,
+      observaciones: h.observaciones,
+      creado_en: h.creado_en,
+      cita: h.citas
+        ? {
+            id_cita: h.citas.id_cita,
+            fecha: h.citas.fecha,
+            hora_inicio: h.citas.hora_inicio,
+            hora_fin: h.citas.hora_fin,
+            odontologo: h.citas.odontologos,
+            tratamiento:
+              h.citas.tratamiento_paciente?.tratamientos ?? null,
+          }
+        : null,
+    }));
 
-      return {
-        id_historial: h.id_historial,
-        diagnostico: h.diagnostico,
-        observaciones: h.observaciones,
-        creado_en: h.creado_en,
-        cita: h.citas
-          ? {
-              id_cita: h.citas.id_cita,
-              fecha: h.citas.fecha,
-              hora_inicio: h.citas.hora_inicio,
-              hora_fin: h.citas.hora_fin,
-              odontologo: h.citas.odontologos,
-              tratamiento // <--- AHORA SÍ ES CORRECTO
-            }
-          : null
-      };
-    });
+    // 6) Permisos
+    const es_titular = relacion.rol_relacion === "titular";
 
-    res.json({
+    return res.json({
       ok: true,
       paciente,
-      citas_asistidas: asistidas,
-      citas_pendientes: pendientes,
-      citas_canceladas: canceladas,
-      historial
+      rol_relacion: relacion.rol_relacion,
+      es_titular,
+      permisos: {
+        puede_editar: es_titular,
+        puede_desvincular: !es_titular,
+      },
+      citas_asistidas: asistidas ?? 0,
+      citas_pendientes: pendientes ?? 0,
+      citas_canceladas: canceladas ?? 0,
+      historial,
     });
-
   } catch (err) {
-    console.error('obtenerPacientePorId error', err);
+    console.error("Error en obtenerPacientePorId:", err);
     res.status(500).json({
-      error: 'Error al obtener paciente',
-      detail: err.message
+      error: "Error al obtener paciente",
+      detail: err.message,
     });
   }
 }
+
 
 
 

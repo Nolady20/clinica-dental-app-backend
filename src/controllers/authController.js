@@ -312,144 +312,7 @@ export async function login(req, res) {
   }
 }
 
-/*
-export async function me(req, res) {
-  try {
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.replace('Bearer ', '').trim();
-    if (!token) return res.status(401).json({ error: 'Token no provisto' });
 
-    const { data: userData, error: getUserErr } = await supabaseAnon.auth.getUser(token);
-    if (getUserErr || !userData?.user) {
-      return res.status(401).json({ error: 'Token inválido' });
-    }
-
-    const authUser = userData.user;
-
-    const { data: profile, error: profErr } = await supabaseAdmin
-      .from('usuarios')
-      .select(`
-        id_usuario,
-        correo,
-        rol,
-        creado_en,
-        pacientes (
-          id_paciente,
-          numero_documento,
-          tipo_documento,
-          nombre,
-          ape_pat,
-          ape_mat,
-          fecha_nacimiento,
-          telefono,
-          sexo
-        )
-      `)
-      .eq('auth_id', authUser.id)
-      .maybeSingle();
-
-    if (profErr) {
-      return res.status(500).json({ error: 'Error consultando perfil' });
-    }
-
-    return res.json(buildResponse(
-      { ...profile, id: authUser.id, email: authUser.email }, 
-      null, 
-      profile.rol === 'paciente' ? profile.pacientes : null
-    ));
-  } catch (err) {
-    console.error('me error', err);
-    return res.status(500).json({ error: 'Error interno en me' });
-  }
-}
-*/
-
-
-
-/*
-export async function me(req, res) {
-  try {
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.replace('Bearer ', '').trim();
-    if (!token) return res.status(401).json({ error: 'Token no provisto' });
-
-    // 1) Validar token contra Supabase Auth
-    const { data: userData, error: getUserErr } = await supabaseAnon.auth.getUser(token);
-    if (getUserErr || !userData?.user) {
-      return res.status(401).json({ error: 'Token inválido' });
-    }
-
-    const authUser = userData.user;
-
-    // 2) Traer usuario en tabla `usuarios`
-    const { data: usuarioRow, error: usuarioErr } = await supabaseAdmin
-      .from('usuarios')
-      .select('id_usuario, correo, rol, creado_en')
-      .eq('auth_id', authUser.id)
-      .maybeSingle();
-
-    if (usuarioErr || !usuarioRow) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
-
-    let pacientes = [];
-
-    // 3) Solo si el rol es paciente → buscar familiares y titular en paciente_usuario
-    if (usuarioRow.rol === 'paciente') {
-      const { data: relaciones, error: relErr } = await supabaseAdmin
-        .from('paciente_usuario')
-        .select(`
-          rol_relacion,
-          estado,
-          pacientes (
-            id_paciente,
-            numero_documento,
-            tipo_documento,
-            nombre,
-            ape_pat,
-            ape_mat,
-            fecha_nacimiento,
-            telefono,
-            sexo
-          )
-        `)
-        .eq('id_usuario', usuarioRow.id_usuario)
-        .eq('estado', true);
-
-      if (relErr) {
-        console.error('Error consultando paciente_usuario:', relErr);
-        return res.status(500).json({ error: 'Error consultando pacientes' });
-      }
-
-      pacientes = (relaciones || []).map(rel => ({
-        ...rel.pacientes,
-        rol_relacion: rel.rol_relacion
-      }));
-    }
-
-    // 4) Responder
-    return res.json({
-      ok: true,
-      user: {
-        id: authUser.id,
-        email: authUser.email,
-        rol: usuarioRow.rol
-      },
-      profile: {
-        id_usuario: usuarioRow.id_usuario,
-        correo: usuarioRow.correo,
-        rol: usuarioRow.rol,
-        creado_en: usuarioRow.creado_en
-      },
-      pacientes
-    });
-  } catch (err) {
-    console.error('me error', err);
-    return res.status(500).json({ error: 'Error interno en me' });
-  }
-}
-
-*/
 
 export async function me(req, res) {
   try {
@@ -731,6 +594,155 @@ export async function verifyOtpAndChangePassword(req, res) {
   } catch (err) {
     console.error("verifyOtpAndChangePassword error:", err);
     return res.status(500).json({ error: "Error interno" });
+  }
+}
+
+export async function actualizarPerfilUsuario(req, res) {
+  try {
+    const authUser = req.user;
+    if (!authUser?.id)
+      return res.status(401).json({ error: "Usuario no autenticado" });
+
+    const {
+      nombre,
+      ape_pat,
+      ape_mat,
+      telefono,
+      direccion,
+      fecha_nacimiento,
+    } = req.body;
+
+    // Obtener id_usuario + id_paciente titular
+    const { data: userRow } = await supabaseAdmin
+      .from("usuarios")
+      .select(`
+        id_usuario,
+        paciente_usuario (
+          id_paciente,
+          rol_relacion
+        )
+      `)
+      .eq("auth_id", authUser.id)
+      .maybeSingle();
+
+    const relacionTitular = userRow.paciente_usuario?.find(
+      (r) => r.rol_relacion === "titular"
+    );
+
+    if (!relacionTitular)
+      return res.status(400).json({ error: "No hay paciente titular" });
+
+    const id_paciente = relacionTitular.id_paciente;
+
+    const campos = {
+      ...(nombre && { nombre }),
+      ...(ape_pat && { ape_pat }),
+      ...(ape_mat && { ape_mat }),
+      ...(telefono && { telefono }),
+      ...(direccion && { direccion }),
+      ...(fecha_nacimiento && { fecha_nacimiento }),
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from("pacientes")
+      .update(campos)
+      .eq("id_paciente", id_paciente)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ ok: true, usuario: data });
+  } catch (err) {
+    res.status(500).json({
+      error: "Error al actualizar perfil de usuario",
+      detail: err.message,
+    });
+  }
+}
+
+export async function cambiarCorreo(req, res) {
+  try {
+    const authUser = req.user;
+    const { nuevo_correo } = req.body;
+
+    if (!nuevo_correo)
+      return res.status(400).json({ error: "Correo requerido" });
+
+    // 1) Actualizar en Supabase Auth
+    await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+      email: nuevo_correo,
+    });
+
+    // 2) Actualizar en tabla usuarios
+    await supabaseAdmin
+      .from("usuarios")
+      .update({ correo: nuevo_correo })
+      .eq("auth_id", authUser.id);
+
+    res.json({ ok: true, mensaje: "Correo actualizado" });
+  } catch (err) {
+    res.status(500).json({
+      error: "Error al cambiar correo",
+      detail: err.message,
+    });
+  }
+}
+
+export async function cambiarPassword(req, res) {
+  try {
+    const authUser = req.user;
+    const { nueva_contrasena } = req.body;
+
+    if (!nueva_contrasena)
+      return res.status(400).json({ error: "Contraseña requerida" });
+
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(
+      authUser.id,
+      {
+        password: nueva_contrasena,
+      }
+    );
+
+    if (error) throw error;
+
+    res.json({ ok: true, mensaje: "Contraseña actualizada" });
+  } catch (err) {
+    res.status(500).json({
+      error: "Error al cambiar contraseña",
+      detail: err.message,
+    });
+  }
+}
+
+export async function eliminarCuenta(req, res) {
+  try {
+    const authUser = req.user;
+
+    // 1) Desactivar usuario
+    await supabaseAdmin
+      .from("usuarios")
+      .update({ activo: false })
+      .eq("auth_id", authUser.id);
+
+    // 2) Desactivar relaciones
+    await supabaseAdmin
+      .from("paciente_usuario")
+      .update({ estado: false })
+      .in(
+        "id_usuario",
+        supabaseAdmin
+          .from("usuarios")
+          .select("id_usuario")
+          .eq("auth_id", authUser.id)
+      );
+
+    res.json({ ok: true, mensaje: "Cuenta eliminada (soft delete)" });
+  } catch (err) {
+    res.status(500).json({
+      error: "Error al eliminar cuenta",
+      detail: err.message,
+    });
   }
 }
 

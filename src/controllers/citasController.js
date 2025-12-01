@@ -577,7 +577,7 @@ export async function obtenerHorariosPorOdontologo(req, res) {
     const hoyISO = ahora.toISOString().split('T')[0];
 
     const slotsManana = ['07:00:00','08:00:00','09:00:00','10:00:00','11:00:00'];
-    const slotsTarde  = ['14:00:00','15:00:00','16:00:00','17:00:00','18:00:00', '19:00:00','20:00:00'];
+    const slotsTarde  = ['14:00:00','15:00:00','16:00:00','17:00:00','18:00:00','19:00:00','20:00:00'];
     const candidateSlots = [...slotsManana, ...slotsTarde];
 
     const { data: citasExistentes, error } = await supabaseAdmin
