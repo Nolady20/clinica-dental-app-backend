@@ -417,6 +417,7 @@ export async function obtenerPacientePorId(req, res) {
     if (!relacion)
       return res.status(403).json({ error: 'No tienes acceso' });
 
+    // 🔹 Obtener datos básicos del paciente
     const { data: paciente } = await supabaseAdmin
       .from('pacientes')
       .select('*')
@@ -426,13 +427,50 @@ export async function obtenerPacientePorId(req, res) {
     if (!paciente)
       return res.status(404).json({ error: 'Paciente no encontrado' });
 
-    return res.json({ ok: true, paciente });
+    // 🔥 Obtener estadísticas de citas
+    const { data: citasAsistidas } = await supabaseAdmin
+      .from('citas')
+      .select('id_cita', { count: 'exact' })
+      .eq('id_paciente', id_paciente)
+      .eq('estado', 'completada');
+
+    const { data: citasPendientes } = await supabaseAdmin
+      .from('citas')
+      .select('id_cita', { count: 'exact' })
+      .eq('id_paciente', id_paciente)
+      .eq('estado', 'pendiente');
+
+    const { data: citasCanceladas } = await supabaseAdmin
+      .from('citas')
+      .select('id_cita', { count: 'exact' })
+      .eq('id_paciente', id_paciente)
+      .eq('estado', 'cancelada');
+
+    // 🔥 Obtener historial
+    const { data: historial } = await supabaseAdmin
+      .from('historial')
+      .select(`
+        *,
+        cita:citas(fecha)
+      `)
+      .eq('id_paciente', id_paciente)
+      .order('creado_en', { ascending: false });
+
+    return res.json({
+      ok: true,
+      paciente,
+      historial: historial || [],
+      citas_asistidas: citasAsistidas?.length || 0,
+      citas_pendientes: citasPendientes?.length || 0,
+      citas_canceladas: citasCanceladas?.length || 0
+    });
 
   } catch (err) {
     console.error('obtenerPacientePorId error', err);
     return res.status(500).json({ error: 'Error', detail: err.message });
   }
 }
+
 
 
 
