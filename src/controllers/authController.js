@@ -212,7 +212,7 @@ export async function login(req, res) {
     if (!numero_documento || !password)
       return res.status(400).json({ error: 'Faltan campos: numero_documento, password' });
 
-    // 1) Buscar paciente por numero_documento (consulta simple)
+    // 1) Buscar paciente por numero_documento
     const { data: paciente, error: pErr } = await supabaseAdmin
       .from('pacientes')
       .select(`
@@ -237,17 +237,16 @@ export async function login(req, res) {
     }
 
     if (!paciente) {
-      // No existe paciente con ese número
       return res.status(401).json({ error: 'Número de documento o contraseña inválidos' });
     }
 
-    // 2) Obtener el correo del usuario asociado (si existe id_usuario)
+    // 2) Obtener usuario asociado
     let usuarioRow = null;
 
     if (paciente.id_usuario) {
       const { data: uData, error: uErr } = await supabaseAdmin
         .from('usuarios')
-        .select('id_usuario, auth_id, correo, rol, creado_en, activo') // 👈 AGREGADO activo
+        .select('id_usuario, auth_id, correo, rol, creado_en, activo')
         .eq('id_usuario', paciente.id_usuario)
         .maybeSingle();
 
@@ -259,10 +258,9 @@ export async function login(req, res) {
       usuarioRow = uData;
 
     } else {
-      // caso raro: paciente existe pero no tiene id_usuario
       const { data: rel, error: relErr } = await supabaseAdmin
         .from('paciente_usuario')
-        .select('id_usuario, rol_relacion, estado, usuarios ( id_usuario, auth_id, correo, rol, activo )') // 👈 AGREGADO activo
+        .select('id_usuario, rol_relacion, estado, usuarios ( id_usuario, auth_id, correo, rol, activo )')
         .eq('id_paciente', paciente.id_paciente)
         .eq('estado', true)
         .limit(1)
@@ -273,34 +271,70 @@ export async function login(req, res) {
         return res.status(500).json({ error: 'Error buscando usuario' });
       }
 
-      if (rel && rel.usuarios) usuarioRow = rel.usuarios;
+      if (rel?.usuarios) usuarioRow = rel.usuarios;
     }
 
     if (!usuarioRow || !usuarioRow.correo) {
-      console.error('Paciente sin usuario asociado (id_paciente):', paciente.id_paciente);
       return res.status(400).json({ error: 'No hay un usuario asociado a este paciente' });
     }
 
-    // 🔥 Si el usuario está desactivado → bloquear login
+    // ❌ Usuario desactivado
     if (usuarioRow.activo === false) {
       return res.status(403).json({ error: 'Tu cuenta está desactivada' });
     }
 
-
-
-    // 3) Hacer login en Supabase Auth con el correo encontrado
+    // 3) Intentar login normal
     const { data: signInData, error: signInErr } = await supabaseAnon.auth.signInWithPassword({
       email: usuarioRow.correo,
       password
     });
 
-    if (signInErr) {
-      console.error('Error en signInWithPassword:', signInErr);
-      return res.status(401).json({ error: 'Número de documento o contraseña inválidos' });
+    // -----------------------------
+    // 🔥 REPARAR CONTRASEÑAS ANTIGUAS
+    // -----------------------------
+    if (signInErr?.message === "Invalid login credentials") {
+
+      console.log(`Intento de reparación de contraseña para ${usuarioRow.correo}`);
+
+      // Actualizar contraseña en Supabase Auth
+      const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(
+        usuarioRow.auth_id,
+        { password }
+      );
+
+      if (!updateErr) {
+
+        // Reintentar login con la nueva contraseña
+        const secondTry = await supabaseAnon.auth.signInWithPassword({
+          email: usuarioRow.correo,
+          password
+        });
+
+        if (!secondTry.error) {
+
+          const usuarioParaRespuesta = {
+            id_usuario: usuarioRow.id_usuario,
+            correo: usuarioRow.correo,
+            rol: usuarioRow.rol,
+            creado_en: usuarioRow.creado_en
+          };
+
+          return res.json(buildResponse(
+            { ...usuarioParaRespuesta, id: secondTry.data.user.id, email: secondTry.data.user.email },
+            secondTry.data.session,
+            paciente
+          ));
+        }
+      }
     }
 
-    // 4) Construir la respuesta unificada
-    // obtener usuario completo (para devolver rol, creado_en, id_usuario, etc.)
+    // ❌ Login falló y no se pudo reparar
+    if (signInErr) {
+      console.error("Error login:", signInErr);
+      return res.status(401).json({ error: "Número de documento o contraseña inválidos" });
+    }
+
+    // 4) Login normal exitoso
     const usuarioParaRespuesta = {
       id_usuario: usuarioRow.id_usuario,
       correo: usuarioRow.correo,
@@ -313,11 +347,13 @@ export async function login(req, res) {
       signInData.session,
       paciente
     ));
+
   } catch (err) {
     console.error('login error', err);
     return res.status(500).json({ error: 'Error interno en login' });
   }
 }
+
 
 export async function me(req, res) {
   try {
