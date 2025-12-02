@@ -51,18 +51,18 @@ function buildResponse(user, session, paciente = null) {
 
 export async function register(req, res) {
   try {
-    const { 
-      correo, 
-      password, 
-      numero_documento, 
-      tipo_documento = 'DNI', 
-      rol, 
-      nombre, 
-      ape_pat, 
-      ape_mat, 
-      fecha_nacimiento, 
-      telefono, 
-      sexo 
+    const {
+      correo,
+      password,
+      numero_documento,
+      tipo_documento = 'DNI',
+      rol,
+      nombre,
+      ape_pat,
+      ape_mat,
+      fecha_nacimiento,
+      telefono,
+      sexo
     } = req.body;
 
     if (!correo || !password || !numero_documento || !rol) {
@@ -120,87 +120,87 @@ export async function register(req, res) {
     let pacienteRow = null;
 
     // 4) Si es paciente, conectar o crear
-if (rol === 'paciente') {
-  if (pacienteExistente && !pacienteExistente.id_usuario) {
-    // 🔑 Reclamar paciente existente
-    const { data: updated, error: updErr } = await supabaseAdmin
-      .from('pacientes')
-      .update({ id_usuario: userRow.id_usuario })
-      .eq('id_paciente', pacienteExistente.id_paciente)
-      .select()
-      .single();
+    if (rol === 'paciente') {
+      if (pacienteExistente && !pacienteExistente.id_usuario) {
+        // 🔑 Reclamar paciente existente
+        const { data: updated, error: updErr } = await supabaseAdmin
+          .from('pacientes')
+          .update({ id_usuario: userRow.id_usuario })
+          .eq('id_paciente', pacienteExistente.id_paciente)
+          .select()
+          .single();
 
-    if (updErr) {
-      console.error('Error actualizando paciente existente:', updErr);
-      return res.status(500).json({ error: updErr.message });
+        if (updErr) {
+          console.error('Error actualizando paciente existente:', updErr);
+          return res.status(500).json({ error: updErr.message });
+        }
+
+        // 👉 crear la relación en paciente_usuario
+        const { error: relErr } = await supabaseAdmin
+          .from('paciente_usuario')
+          .insert([{
+            id_paciente: updated.id_paciente,
+            id_usuario: userRow.id_usuario,
+            rol_relacion: 'titular',
+            estado: true
+          }]);
+
+        if (relErr) {
+          console.error('Error creando relación paciente_usuario:', relErr);
+          return res.status(500).json({ error: relErr.message });
+        }
+
+        pacienteRow = updated;
+      } else {
+        // 🆕 Crear nuevo paciente
+        const { data: pacData, error: pacErr } = await supabaseAdmin
+          .from('pacientes')
+          .insert([{
+            id_usuario: userRow.id_usuario,
+            numero_documento,
+            tipo_documento,
+            nombre,
+            ape_pat,
+            ape_mat,
+            fecha_nacimiento: formatDate(fecha_nacimiento),
+            telefono,
+            sexo
+          }])
+          .select()
+          .single();
+
+        if (pacErr) {
+          console.error('Error insertando en pacientes:', pacErr);
+          // rollback
+          await supabaseAdmin.from('usuarios').delete().eq('id_usuario', userRow.id_usuario);
+          await supabaseAdmin.auth.admin.deleteUser(auth_id);
+          return res.status(500).json({ error: pacErr.message });
+        }
+
+        // 👉 crear la relación en paciente_usuario
+        const { error: relErr } = await supabaseAdmin
+          .from('paciente_usuario')
+          .insert([{
+            id_paciente: pacData.id_paciente,
+            id_usuario: userRow.id_usuario,
+            rol_relacion: 'titular',
+            estado: true
+          }]);
+
+        if (relErr) {
+          console.error('Error creando relación paciente_usuario:', relErr);
+          return res.status(500).json({ error: relErr.message });
+        }
+
+        pacienteRow = pacData;
+      }
     }
-
-    // 👉 crear la relación en paciente_usuario
-    const { error: relErr } = await supabaseAdmin
-      .from('paciente_usuario')
-      .insert([{
-        id_paciente: updated.id_paciente,
-        id_usuario: userRow.id_usuario,
-        rol_relacion: 'titular',
-        estado: true
-      }]);
-
-    if (relErr) {
-      console.error('Error creando relación paciente_usuario:', relErr);
-      return res.status(500).json({ error: relErr.message });
-    }
-
-    pacienteRow = updated;
-  } else {
-    // 🆕 Crear nuevo paciente
-    const { data: pacData, error: pacErr } = await supabaseAdmin
-      .from('pacientes')
-      .insert([{
-        id_usuario: userRow.id_usuario,
-        numero_documento,
-        tipo_documento,
-        nombre,
-        ape_pat,
-        ape_mat,
-        fecha_nacimiento: formatDate(fecha_nacimiento),
-        telefono,
-        sexo
-      }])
-      .select()
-      .single();
-
-    if (pacErr) {
-      console.error('Error insertando en pacientes:', pacErr);
-      // rollback
-      await supabaseAdmin.from('usuarios').delete().eq('id_usuario', userRow.id_usuario);
-      await supabaseAdmin.auth.admin.deleteUser(auth_id);
-      return res.status(500).json({ error: pacErr.message });
-    }
-
-    // 👉 crear la relación en paciente_usuario
-    const { error: relErr } = await supabaseAdmin
-      .from('paciente_usuario')
-      .insert([{
-        id_paciente: pacData.id_paciente,
-        id_usuario: userRow.id_usuario,
-        rol_relacion: 'titular',
-        estado: true
-      }]);
-
-    if (relErr) {
-      console.error('Error creando relación paciente_usuario:', relErr);
-      return res.status(500).json({ error: relErr.message });
-    }
-
-    pacienteRow = pacData;
-  }
-}
 
 
     // 5) Responder
     return res.json(buildResponse(
-      { ...userRow, id: auth_id }, 
-      null, 
+      { ...userRow, id: auth_id },
+      null,
       pacienteRow
     ));
   } catch (err) {
@@ -212,7 +212,7 @@ if (rol === 'paciente') {
 export async function login(req, res) {
   try {
     const { numero_documento, password } = req.body;
-    if (!numero_documento || !password) 
+    if (!numero_documento || !password)
       return res.status(400).json({ error: 'Faltan campos: numero_documento, password' });
 
     // 1) Buscar paciente por numero_documento (consulta simple)
@@ -246,10 +246,11 @@ export async function login(req, res) {
 
     // 2) Obtener el correo del usuario asociado (si existe id_usuario)
     let usuarioRow = null;
+
     if (paciente.id_usuario) {
       const { data: uData, error: uErr } = await supabaseAdmin
         .from('usuarios')
-        .select('id_usuario, auth_id, correo, rol, creado_en')
+        .select('id_usuario, auth_id, correo, rol, creado_en, activo') // 👈 AGREGADO activo
         .eq('id_usuario', paciente.id_usuario)
         .maybeSingle();
 
@@ -257,13 +258,14 @@ export async function login(req, res) {
         console.error('Error obteniendo usuario asociado:', uErr);
         return res.status(500).json({ error: 'Error buscando usuario' });
       }
+
       usuarioRow = uData;
+
     } else {
       // caso raro: paciente existe pero no tiene id_usuario
-      // opcional: buscar en paciente_usuario por titular/autorizado
       const { data: rel, error: relErr } = await supabaseAdmin
         .from('paciente_usuario')
-        .select('id_usuario, rol_relacion, estado, usuarios ( id_usuario, auth_id, correo, rol )')
+        .select('id_usuario, rol_relacion, estado, usuarios ( id_usuario, auth_id, correo, rol, activo )') // 👈 AGREGADO activo
         .eq('id_paciente', paciente.id_paciente)
         .eq('estado', true)
         .limit(1)
@@ -273,6 +275,7 @@ export async function login(req, res) {
         console.error('Error buscando relacion paciente_usuario:', relErr);
         return res.status(500).json({ error: 'Error buscando usuario' });
       }
+
       if (rel && rel.usuarios) usuarioRow = rel.usuarios;
     }
 
@@ -280,6 +283,13 @@ export async function login(req, res) {
       console.error('Paciente sin usuario asociado (id_paciente):', paciente.id_paciente);
       return res.status(400).json({ error: 'No hay un usuario asociado a este paciente' });
     }
+
+    // 🔥 Si el usuario está desactivado → bloquear login
+    if (usuarioRow.activo === false) {
+      return res.status(403).json({ error: 'Tu cuenta está desactivada' });
+    }
+
+
 
     // 3) Hacer login en Supabase Auth con el correo encontrado
     const { data: signInData, error: signInErr } = await supabaseAnon.auth.signInWithPassword({
@@ -719,30 +729,41 @@ export async function eliminarCuenta(req, res) {
   try {
     const authUser = req.user;
 
+    if (!authUser?.id_usuario) {
+      return res.status(400).json({ error: "Usuario no encontrado" });
+    }
+
+    const idUsuario = authUser.id_usuario;
+
     // 1) Desactivar usuario
-    await supabaseAdmin
+    const { error: userErr } = await supabaseAdmin
       .from("usuarios")
       .update({ activo: false })
-      .eq("auth_id", authUser.id);
+      .eq("id_usuario", idUsuario);
 
-    // 2) Desactivar relaciones
-    await supabaseAdmin
+    if (userErr) throw userErr;
+
+    // 2) Desactivar relaciones paciente_usuario
+    const { error: relErr } = await supabaseAdmin
       .from("paciente_usuario")
       .update({ estado: false })
-      .in(
-        "id_usuario",
-        supabaseAdmin
-          .from("usuarios")
-          .select("id_usuario")
-          .eq("auth_id", authUser.id)
-      );
+      .eq("id_usuario", idUsuario);
 
-    res.json({ ok: true, mensaje: "Cuenta eliminada (soft delete)" });
+    if (relErr) throw relErr;
+
+    return res.json({
+      ok: true,
+      mensaje: "Cuenta eliminada (soft delete)",
+    });
+
   } catch (err) {
+    console.error("Error eliminarCuenta:", err);
     res.status(500).json({
       error: "Error al eliminar cuenta",
       detail: err.message,
     });
   }
 }
+
+
 
