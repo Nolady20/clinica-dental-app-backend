@@ -760,6 +760,7 @@ export async function obtenerTratamientosEnProgreso(req, res) {
 
     if (error) throw error;
 
+    console.log("DATA ENVIADA A ANDROID:", data);
     return res.json({
       ok: true,
       tratamientos: data

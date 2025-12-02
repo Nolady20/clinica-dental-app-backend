@@ -520,7 +520,6 @@ export async function resetPassword(req, res) {
   }
 }
 
-
 export async function verifyOtpAndChangePassword(req, res) {
   try {
     const { email, codigo, nueva_contrasena } = req.body;
