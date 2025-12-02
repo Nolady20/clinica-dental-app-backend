@@ -14,7 +14,6 @@ export async function authMiddleware(req, res, next) {
 
     const authUser = userData.user;
 
-    // Buscar en tu tabla usuarios por auth_id
     const { data: usuarioRow, error: usuarioErr } = await supabaseAdmin
       .from('usuarios')
       .select('id_usuario, rol, activo')
@@ -23,18 +22,30 @@ export async function authMiddleware(req, res, next) {
 
     if (usuarioErr) throw usuarioErr;
 
-    // Guardamos ambos en req.user
+    if (!usuarioRow) {
+      return res.status(401).json({ error: 'Usuario no encontrado en tabla interna' });
+    }
+
+    /** 
+     * ⭐ **PERMITIMOS ELIMINAR CUENTA AUNQUE ESTÉ DESACTIVADO**
+     */
+    if (usuarioRow.activo === false && req.path !== "/auth/delete-account") {
+      return res.status(403).json({ error: 'Tu cuenta está desactivada' });
+    }
+
     req.user = {
-      ...authUser,        // datos de Supabase (id, email, etc.)
-      id_usuario: usuarioRow?.id_usuario || null, // tu id interno
-      rol: usuarioRow?.rol || null,
-      activo: usuarioRow?.activo ?? true,
+      ...authUser,
+      id_usuario: usuarioRow.id_usuario,
+      rol: usuarioRow.rol,
+      activo: usuarioRow.activo
     };
 
     next();
   } catch (err) {
     console.error('authMiddleware error', err);
-    return res.status(500).json({ error: 'Error interno en middleware', detail: err.message });
+    return res.status(500).json({
+      error: 'Error interno en middleware',
+      detail: err.message
+    });
   }
 }
-  

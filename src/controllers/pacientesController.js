@@ -3,16 +3,13 @@ import { supabaseAdmin } from '../supabaseClient.js';
 
 /**
  * Crear paciente (ej. hijo) y asociarlo al usuario logueado.
- * Usa las columnas que tienes: numero_documento, tipo_documento, nombre, ape_pat, ape_mat, fecha_nacimiento, telefono, direccion, sexo
  */
 export async function crearPaciente(req, res) {
   try {
-    // req.user viene de authMiddleware -> es el user auth de supabase (contiene .id)
     const authUser = req.user;
     if (!authUser?.id) return res.status(401).json({ error: 'Usuario no autenticado' });
     const auth_id = authUser.id;
 
-    // 1) Obtener id_usuario en tu tabla "usuarios" a partir del auth_id
     const { data: usuarioRow, error: usuarioErr } = await supabaseAdmin
       .from('usuarios')
       .select('id_usuario')
@@ -24,7 +21,6 @@ export async function crearPaciente(req, res) {
 
     const id_usuario = usuarioRow.id_usuario;
 
-    // 2) Campos recibidos desde el cliente
     const {
       numero_documento,
       tipo_documento = 'DNI',
@@ -35,14 +31,12 @@ export async function crearPaciente(req, res) {
       telefono,
       direccion,
       sexo,
-      rol_relacion = 'titular' // 'titular' | 'responsable' | 'autorizado'
+      rol_relacion = 'titular'
     } = req.body;
 
-    if (!numero_documento || !nombre || !ape_pat) {
-      return res.status(400).json({ error: 'Faltan campos obligatorios: numero_documento, nombre, ape_pat' });
-    }
+    if (!numero_documento || !nombre || !ape_pat)
+      return res.status(400).json({ error: 'Faltan campos obligatorios' });
 
-    // 3) Buscar si ya existe paciente con ese documento (evitar duplicados)
     const { data: pacienteExistente, error: existeErr } = await supabaseAdmin
       .from('pacientes')
       .select('*')
@@ -57,7 +51,6 @@ export async function crearPaciente(req, res) {
     if (pacienteExistente) {
       pacienteRow = pacienteExistente;
 
-      // 3.a) Si ya existe el paciente, comprobar/crear la relación paciente_usuario
       const { data: relacion, error: relErr } = await supabaseAdmin
         .from('paciente_usuario')
         .select('id')
@@ -70,19 +63,13 @@ export async function crearPaciente(req, res) {
       if (!relacion) {
         const { error: insertRelErr } = await supabaseAdmin
           .from('paciente_usuario')
-          .insert([{
-            id_paciente: pacienteRow.id_paciente,
-            id_usuario,
-            rol_relacion,
-            estado: true
-          }]);
+          .insert([{ id_paciente: pacienteRow.id_paciente, id_usuario, rol_relacion, estado: true }]);
         if (insertRelErr) throw insertRelErr;
       }
 
-      return res.status(200).json({ ok: true, paciente: pacienteRow, message: 'Paciente existente vinculado al usuario' });
+      return res.json({ ok: true, paciente: pacienteRow, message: 'Paciente existente vinculado' });
     }
 
-    // 4) Si no existe, insertar nuevo paciente
     const { data: nuevoPaciente, error: insertPacErr } = await supabaseAdmin
       .from('pacientes')
       .insert([{
@@ -99,32 +86,25 @@ export async function crearPaciente(req, res) {
       .select()
       .single();
 
-    if (insertPacErr) {
-      // si hay un error por unique constraint, manejarlo más adelante si quieres
-      throw insertPacErr;
-    }
+    if (insertPacErr) throw insertPacErr;
 
     pacienteRow = nuevoPaciente;
 
-    // 5) Crear relación paciente_usuario
-    const { error: insertRelErr2 } = await supabaseAdmin
+    const { error: relErr } = await supabaseAdmin
       .from('paciente_usuario')
-      .insert([{
-        id_paciente: pacienteRow.id_paciente,
-        id_usuario,
-        rol_relacion,
-        estado: true
-      }]);
+      .insert([{ id_paciente: pacienteRow.id_paciente, id_usuario, rol_relacion, estado: true }]);
 
-    if (insertRelErr2) throw insertRelErr2;
+    if (relErr) throw relErr;
 
     return res.status(201).json({ ok: true, paciente: pacienteRow });
+
   } catch (err) {
     console.error('crearPaciente error', err);
-    // Si Supabase devuelve un error con code 23505 (unique violation), se puede mapear aquí
-    return res.status(500).json({ error: 'Error al crear paciente', detail: err.message || err });
+    return res.status(500).json({ error: 'Error al crear paciente', detail: err.message });
   }
 }
+
+
 
 /**
  * Obtener pacientes asociados al usuario autenticado
@@ -135,15 +115,13 @@ export async function obtenerPacientesUsuario(req, res) {
     if (!authUser?.id) return res.status(401).json({ error: 'Usuario no autenticado' });
     const auth_id = authUser.id;
 
-    // Obtener id_usuario
-    const { data: usuarioRow, error: usuarioErr } = await supabaseAdmin
+    const { data: usuarioRow } = await supabaseAdmin
       .from('usuarios')
       .select('id_usuario')
       .eq('auth_id', auth_id)
       .maybeSingle();
 
-    if (usuarioErr) throw usuarioErr;
-    if (!usuarioRow) return res.status(400).json({ error: 'No se encontró registro en tabla usuarios para este auth_id' });
+    if (!usuarioRow) return res.status(400).json({ error: 'Usuario no encontrado' });
 
     const id_usuario = usuarioRow.id_usuario;
 
@@ -163,8 +141,7 @@ export async function obtenerPacientesUsuario(req, res) {
           fecha_nacimiento,
           telefono,
           direccion,
-          sexo,
-          creado_en
+          sexo
         )
       `)
       .eq('id_usuario', id_usuario)
@@ -172,7 +149,6 @@ export async function obtenerPacientesUsuario(req, res) {
 
     if (error) throw error;
 
-    // Mapear para devolver sólo el array de pacientes con la info útil (opcional)
     const pacientes = data.map(row => ({
       id_paciente: row.pacientes.id_paciente,
       numero_documento: row.pacientes.numero_documento,
@@ -184,60 +160,53 @@ export async function obtenerPacientesUsuario(req, res) {
       telefono: row.pacientes.telefono,
       direccion: row.pacientes.direccion,
       sexo: row.pacientes.sexo,
-      rol_relacion: row.rol_relacion,
-      relacion_estado: row.estado
+      rol_relacion: row.rol_relacion
     }));
 
     return res.json({ ok: true, pacientes });
+
   } catch (err) {
     console.error('obtenerPacientesUsuario error', err);
-    return res.status(500).json({ error: 'Error al obtener pacientes', detail: err.message || err });
+    return res.status(500).json({ error: 'Error al obtener pacientes', detail: err.message });
   }
 }
 
-// Vincular usuario con un paciente existente (claim)
+
+
+/**
+ * Reclamar paciente existente
+ */
 export async function claimPaciente(req, res) {
   try {
     const { id_paciente } = req.params;
     const { rol_relacion = 'titular' } = req.body;
-
-    // 1) Obtener authUser
     const authUser = req.user;
-    if (!authUser?.id) return res.status(401).json({ error: 'Usuario no autenticado' });
-    const auth_id = authUser.id;
 
-    // 2) Buscar el id_usuario en tabla usuarios
-    const { data: usuarioRow, error: usuarioErr } = await supabaseAdmin
+    if (!authUser?.id) return res.status(401).json({ error: 'Usuario no autenticado' });
+
+    const { data: usuarioRow } = await supabaseAdmin
       .from('usuarios')
       .select('id_usuario')
-      .eq('auth_id', auth_id)
+      .eq('auth_id', authUser.id)
       .maybeSingle();
 
-    if (usuarioErr) throw usuarioErr;
-    if (!usuarioRow) return res.status(400).json({ error: 'No se encontró usuario para este auth_id' });
+    if (!usuarioRow) return res.status(400).json({ error: 'Usuario no encontrado' });
 
     const id_usuario = usuarioRow.id_usuario;
 
-    if (!id_paciente) {
-      return res.status(400).json({ error: 'Falta id_paciente' });
-    }
-
-    // 3) Verificar si ya existe relación de este usuario con el paciente
-    const { data: relacionExistente, error: errorCheck } = await supabaseAdmin
+    const { data: relacion } = await supabaseAdmin
       .from('paciente_usuario')
       .select('*')
       .eq('id_paciente', id_paciente)
       .eq('id_usuario', id_usuario)
       .maybeSingle();
 
-    if (errorCheck) throw errorCheck;
-    if (relacionExistente) {
-      return res.status(400).json({ error: 'El usuario ya está vinculado a este paciente' });
+    if (relacion) {
+      return res.status(400).json({ error: 'Ya estás vinculado a este paciente' });
     }
 
-    // 4) Si quiere ser titular, validar que no exista ya un titular
     if (rol_relacion === 'titular') {
-      const { data: titularExistente, error: titularErr } = await supabaseAdmin
+      const { data: titularExistente } = await supabaseAdmin
         .from('paciente_usuario')
         .select('id_usuario')
         .eq('id_paciente', id_paciente)
@@ -245,42 +214,36 @@ export async function claimPaciente(req, res) {
         .eq('estado', true)
         .maybeSingle();
 
-      if (titularErr) throw titularErr;
       if (titularExistente) {
-        return res.status(400).json({ error: 'Este paciente ya tiene un titular asignado' });
+        return res.status(400).json({ error: 'Este paciente ya tiene titular' });
       }
     }
 
-    // 5) Crear la relación
     const { data, error } = await supabaseAdmin
       .from('paciente_usuario')
-      .insert([{
-        id_paciente,
-        id_usuario,
-        rol_relacion,
-        estado: true
-      }])
+      .insert([{ id_paciente, id_usuario, rol_relacion, estado: true }])
       .select()
       .single();
 
     if (error) throw error;
 
-    res.json({ ok: true, relacion: data });
+    return res.json({ ok: true, relacion: data });
+
   } catch (err) {
     console.error('claimPaciente error', err);
-    res.status(500).json({ error: 'Error al vincular paciente', detail: err.message || err });
+    return res.status(500).json({ error: 'Error al vincular paciente', detail: err.message });
   }
 }
 
 
-// Obtener todos los pacientes relacionados a un usuario
+
+/**
+ * Obtener todos los pacientes del usuario (alias)
+ */
 export async function obtenerPacientesDeUsuario(req, res) {
   try {
-    const { id_usuario } = req.user; // viene del authMiddleware
-
-    if (!id_usuario) {
-      return res.status(400).json({ error: 'No se pudo identificar al usuario' });
-    }
+    const { id_usuario } = req.user;
+    if (!id_usuario) return res.status(400).json({ error: 'No se pudo identificar al usuario' });
 
     const { data, error } = await supabaseAdmin
       .from('paciente_usuario')
@@ -288,66 +251,56 @@ export async function obtenerPacientesDeUsuario(req, res) {
         id,
         rol_relacion,
         estado,
-        pacientes (
-          id_paciente,
-          tipo_documento,
-          numero_documento,
-          nombre,
-          ape_pat,
-          ape_mat,
-          fecha_nacimiento,
-          telefono,
-          direccion,
-          sexo,
-          creado_en
-        )
+        pacientes (*)
       `)
       .eq('id_usuario', id_usuario)
       .eq('estado', true);
 
     if (error) throw error;
 
-    res.json({ ok: true, pacientes: data });
+    return res.json({ ok: true, pacientes: data });
+
   } catch (err) {
     console.error('obtenerPacientesDeUsuario error', err);
-    res.status(500).json({ error: 'Error al obtener pacientes del usuario' });
+    return res.status(500).json({ error: 'Error', detail: err.message });
   }
 }
 
 
+
+/**
+ * Actualizar datos de un paciente
+ */
 export async function actualizarPaciente(req, res) {
   try {
     const { id_paciente } = req.params;
     const authUser = req.user;
 
     if (!authUser?.id)
-      return res.status(401).json({ error: "Usuario no autenticado" });
+      return res.status(401).json({ error: 'Usuario no autenticado' });
 
-    // Obtener id_usuario interno
     const { data: usuarioRow } = await supabaseAdmin
-      .from("usuarios")
-      .select("id_usuario")
-      .eq("auth_id", authUser.id)
+      .from('usuarios')
+      .select('id_usuario')
+      .eq('auth_id', authUser.id)
       .maybeSingle();
 
     if (!usuarioRow)
-      return res.status(400).json({ error: "Usuario no encontrado" });
+      return res.status(400).json({ error: 'Usuario no encontrado' });
 
     const id_usuario = usuarioRow.id_usuario;
 
-    // Verificar que el usuario esté asociado a este paciente
     const { data: relacion } = await supabaseAdmin
-      .from("paciente_usuario")
-      .select("id")
-      .eq("id_usuario", id_usuario)
-      .eq("id_paciente", id_paciente)
-      .eq("estado", true)
+      .from('paciente_usuario')
+      .select('id')
+      .eq('id_usuario', id_usuario)
+      .eq('id_paciente', id_paciente)
+      .eq('estado', true)
       .maybeSingle();
 
     if (!relacion)
-      return res.status(403).json({ error: "No tienes acceso a este paciente" });
+      return res.status(403).json({ error: 'No tienes acceso a este paciente' });
 
-    // Campos permitidos
     const {
       nombre,
       ape_pat,
@@ -355,7 +308,7 @@ export async function actualizarPaciente(req, res) {
       fecha_nacimiento,
       telefono,
       direccion,
-      sexo,
+      sexo
     } = req.body;
 
     const campos = {
@@ -365,39 +318,36 @@ export async function actualizarPaciente(req, res) {
       ...(fecha_nacimiento && { fecha_nacimiento }),
       ...(telefono && { telefono }),
       ...(direccion && { direccion }),
-      ...(sexo && { sexo }),
+      ...(sexo && { sexo })
     };
 
-    // Actualizar datos
     const { data, error } = await supabaseAdmin
-      .from("pacientes")
+      .from('pacientes')
       .update(campos)
-      .eq("id_paciente", id_paciente)
+      .eq('id_paciente', id_paciente)
       .select()
       .single();
 
     if (error) throw error;
 
-    res.json({ ok: true, paciente: data });
+    return res.json({ ok: true, paciente: data });
+
   } catch (err) {
-    console.error("Error en actualizarPaciente:", err);
-    res.status(500).json({
-      error: "Error al actualizar paciente",
-      detail: err.message,
-    });
+    console.error('actualizarPaciente error', err);
+    return res.status(500).json({ error: 'Error al actualizar', detail: err.message });
   }
 }
 
 
 
-
+/**
+ * Desvincular paciente del usuario
+ */
 export async function desvincularPaciente(req, res) {
   try {
     const { id_paciente } = req.params;
     const authUser = req.user;
-    if (!authUser?.id) return res.status(401).json({ error: 'Usuario no autenticado' });
 
-    // Obtener id_usuario
     const { data: usuarioRow } = await supabaseAdmin
       .from('usuarios')
       .select('id_usuario')
@@ -405,20 +355,20 @@ export async function desvincularPaciente(req, res) {
       .maybeSingle();
 
     if (!usuarioRow) return res.status(400).json({ error: 'Usuario no encontrado' });
+
     const id_usuario = usuarioRow.id_usuario;
 
-    // Verificar que exista relación activa
     const { data: relacion } = await supabaseAdmin
       .from('paciente_usuario')
-      .select('id, rol_relacion')
+      .select('id')
       .eq('id_paciente', id_paciente)
       .eq('id_usuario', id_usuario)
       .eq('estado', true)
       .maybeSingle();
 
-    if (!relacion) return res.status(404).json({ error: 'No existe relación con este paciente' });
+    if (!relacion)
+      return res.status(404).json({ error: 'No existe relación' });
 
-    // Si es titular, podrías opcionalmente marcar inactivo a todas sus relaciones
     const { error } = await supabaseAdmin
       .from('paciente_usuario')
       .update({ estado: false })
@@ -427,156 +377,122 @@ export async function desvincularPaciente(req, res) {
 
     if (error) throw error;
 
-    res.json({ ok: true, message: 'Paciente desvinculado correctamente' });
+    return res.json({ ok: true, message: 'Paciente desvinculado' });
+
   } catch (err) {
-    console.error('eliminarPaciente error', err);
-    res.status(500).json({ error: 'Error al desvincular paciente', detail: err.message });
+    console.error('desvincularPaciente error', err);
+    return res.status(500).json({ error: 'Error', detail: err.message });
   }
 }
 
 
+
+/**
+ * Obtener datos completos de un paciente por ID
+ */
 export async function obtenerPacientePorId(req, res) {
   try {
     const { id_paciente } = req.params;
     const authUser = req.user;
 
-    if (!authUser?.id) {
-      return res.status(401).json({ error: "Usuario no autenticado" });
-    }
+    const { data: usuarioRow } = await supabaseAdmin
+      .from('usuarios')
+      .select('id_usuario')
+      .eq('auth_id', authUser.id)
+      .maybeSingle();
 
-    // 1) Buscar id_usuario interno
+    if (!usuarioRow)
+      return res.status(400).json({ error: 'Usuario no encontrado' });
+
+    const id_usuario = usuarioRow.id_usuario;
+
+    const { data: relacion } = await supabaseAdmin
+      .from('paciente_usuario')
+      .select('rol_relacion, estado')
+      .eq('id_usuario', id_usuario)
+      .eq('id_paciente', id_paciente)
+      .eq('estado', true)
+      .maybeSingle();
+
+    if (!relacion)
+      return res.status(403).json({ error: 'No tienes acceso' });
+
+    const { data: paciente } = await supabaseAdmin
+      .from('pacientes')
+      .select('*')
+      .eq('id_paciente', id_paciente)
+      .maybeSingle();
+
+    if (!paciente)
+      return res.status(404).json({ error: 'Paciente no encontrado' });
+
+    return res.json({ ok: true, paciente });
+
+  } catch (err) {
+    console.error('obtenerPacientePorId error', err);
+    return res.status(500).json({ error: 'Error', detail: err.message });
+  }
+}
+
+
+
+/**
+ * Obtener perfil del paciente titular
+ */
+export async function obtenerPerfilTitular(req, res) {
+  try {
+    const authUser = req.user;
+    if (!authUser?.id)
+      return res.status(401).json({ error: 'Usuario no autenticado' });
+
+    // Obtener id_usuario usando el auth_id del token
     const { data: usuarioRow, error: usuarioErr } = await supabaseAdmin
-      .from("usuarios")
-      .select("id_usuario")
-      .eq("auth_id", authUser.id)
+      .from('usuarios')
+      .select('id_usuario')
+      .eq('auth_id', authUser.id)
       .maybeSingle();
 
     if (usuarioErr) throw usuarioErr;
     if (!usuarioRow)
-      return res.status(400).json({ error: "Usuario no encontrado" });
+      return res.status(400).json({ error: 'Usuario no encontrado' });
 
     const id_usuario = usuarioRow.id_usuario;
 
-    // 2) Verificar relación usuario-paciente
-    const { data: relacion, error: relErr } = await supabaseAdmin
-      .from("paciente_usuario")
-      .select("rol_relacion, estado")
-      .eq("id_usuario", id_usuario)
-      .eq("id_paciente", id_paciente)
-      .eq("estado", true)
-      .maybeSingle();
-
-    if (relErr) throw relErr;
-
-    if (!relacion) {
-      return res
-        .status(403)
-        .json({ error: "No tienes acceso a este paciente" });
-    }
-
-    // 3) Obtener datos del paciente
-    const { data: paciente, error: pacErr } = await supabaseAdmin
-      .from("pacientes")
-      .select("*")
-      .eq("id_paciente", id_paciente)
-      .maybeSingle();
-
-    if (pacErr) throw pacErr;
-    if (!paciente)
-      return res.status(404).json({ error: "Paciente no encontrado" });
-
-    // 4) Contadores de citas
-    const { count: asistidas } = await supabaseAdmin
-      .from("citas")
-      .select("*", { count: "exact", head: true })
-      .eq("id_paciente", id_paciente)
-      .eq("estado", "completada");
-
-    const { count: pendientes } = await supabaseAdmin
-      .from("citas")
-      .select("*", { count: "exact", head: true })
-      .eq("id_paciente", id_paciente)
-      .eq("estado", "pendiente");
-
-    const { count: canceladas } = await supabaseAdmin
-      .from("citas")
-      .select("*", { count: "exact", head: true })
-      .eq("id_paciente", id_paciente)
-      .eq("estado", "cancelada");
-
-    // 5) Historial clínico
-    const { data: historialRaw, error: histErr } = await supabaseAdmin
-      .from("historial")
-      .select(
-        `
-        id_historial,
-        diagnostico,
-        observaciones,
-        creado_en,
-        citas (
-          id_cita,
-          fecha,
-          hora_inicio,
-          hora_fin,
-          odontologos (
-            id_odontologo,
-            nombre,
-            especialidad
-          ),
-          tratamiento_paciente (
-            tratamientos (
-              id_tratamiento,
-              nombre
-            )
-          )
+    // Buscar titular en la tabla pivote paciente_usuario
+    const { data: relacion, error: relacionErr } = await supabaseAdmin
+      .from('paciente_usuario')
+      .select(`
+        id_paciente,
+        pacientes (
+          id_paciente,
+          numero_documento,
+          tipo_documento,
+          nombre,
+          ape_pat,
+          ape_mat,
+          fecha_nacimiento,
+          telefono,
+          direccion,
+          sexo
         )
-      `
-      )
-      .eq("id_paciente", id_paciente)
-      .order("creado_en", { ascending: false });
+      `)
+      .eq('id_usuario', id_usuario)
+      .eq('rol_relacion', 'titular')
+      .eq('estado', true)
+      .maybeSingle();
 
-    if (histErr) throw histErr;
+    if (relacionErr) throw relacionErr;
 
-    const historial = (historialRaw ?? []).map((h) => ({
-      id_historial: h.id_historial,
-      diagnostico: h.diagnostico,
-      observaciones: h.observaciones,
-      creado_en: h.creado_en,
-      cita: h.citas
-        ? {
-            id_cita: h.citas.id_cita,
-            fecha: h.citas.fecha,
-            hora_inicio: h.citas.hora_inicio,
-            hora_fin: h.citas.hora_fin,
-            odontologo: h.citas.odontologos,
-            tratamiento:
-              h.citas.tratamiento_paciente?.tratamientos ?? null,
-          }
-        : null,
-    }));
+    if (!relacion)
+      return res.status(404).json({ error: 'No tienes paciente titular' });
 
-    // 6) Permisos
-    const es_titular = relacion.rol_relacion === "titular";
+    return res.json({ ok: true, paciente: relacion.pacientes });
 
-    return res.json({
-      ok: true,
-      paciente,
-      rol_relacion: relacion.rol_relacion,
-      es_titular,
-      permisos: {
-        puede_editar: es_titular,
-        puede_desvincular: !es_titular,
-      },
-      citas_asistidas: asistidas ?? 0,
-      citas_pendientes: pendientes ?? 0,
-      citas_canceladas: canceladas ?? 0,
-      historial,
-    });
   } catch (err) {
-    console.error("Error en obtenerPacientePorId:", err);
-    res.status(500).json({
-      error: "Error al obtener paciente",
-      detail: err.message,
+    console.error('obtenerPerfilTitular error', err);
+    return res.status(500).json({
+      error: 'Error al obtener perfil',
+      detail: err.message
     });
   }
 }
@@ -584,9 +500,186 @@ export async function obtenerPacientePorId(req, res) {
 
 
 
+/**
+ * Actualizar perfil del paciente titular
+ */
+export async function actualizarPerfilTitular(req, res) {
+  try {
+    const authUser = req.user;
 
+    if (!authUser?.id)
+      return res.status(401).json({ error: 'Usuario no autenticado' });
 
+    // Obtener id_usuario real del token
+    let { id_usuario } = authUser;
 
+    if (!id_usuario) {
+      const { data: usuarioRow, error: usuarioErr } = await supabaseAdmin
+        .from('usuarios')
+        .select('id_usuario')
+        .eq('auth_id', authUser.id)
+        .maybeSingle();
 
+      if (usuarioErr) throw usuarioErr;
+      if (!usuarioRow)
+        return res.status(400).json({ error: 'Usuario no encontrado' });
 
+      id_usuario = usuarioRow.id_usuario;
+    }
 
+    // Obtener el id del paciente titular desde la tabla pivote
+    const { data: relacion, error: relErr } = await supabaseAdmin
+      .from('paciente_usuario')
+      .select('id_paciente')
+      .eq('id_usuario', id_usuario)
+      .eq('rol_relacion', 'titular')
+      .eq('estado', true)
+      .maybeSingle();
+
+    if (relErr) throw relErr;
+    if (!relacion)
+      return res.status(404).json({ error: 'No tienes paciente titular' });
+
+    const id_paciente = relacion.id_paciente;
+
+    // Campos que se pueden actualizar
+    const {
+      nombre,
+      ape_pat,
+      ape_mat,
+      telefono,
+      direccion,
+      fecha_nacimiento,
+      sexo
+    } = req.body;
+
+    const campos = {
+      ...(nombre && { nombre }),
+      ...(ape_pat && { ape_pat }),
+      ...(ape_mat && { ape_mat }),
+      ...(telefono && { telefono }),
+      ...(direccion && { direccion }),
+      ...(fecha_nacimiento && { fecha_nacimiento }),
+      ...(sexo && { sexo })
+    };
+
+    if (Object.keys(campos).length === 0)
+      return res.status(400).json({ error: 'No se enviaron campos' });
+
+    // Actualizar paciente
+    const { data: pacienteActualizado, error: updateErr } = await supabaseAdmin
+      .from('pacientes')
+      .update(campos)
+      .eq('id_paciente', id_paciente)
+      .select()
+      .single();
+
+    if (updateErr) throw updateErr;
+
+    return res.json({
+      ok: true,
+      paciente: pacienteActualizado,
+      message: 'Perfil actualizado correctamente'
+    });
+
+  } catch (err) {
+    console.error('actualizarPerfilTitular error', err);
+    return res.status(500).json({
+      error: 'Error al actualizar perfil',
+      detail: err.message
+    });
+  }
+}
+
+/**
+ * Cambiar correo del usuario autenticado
+ */
+export async function cambiarCorreo(req, res) {
+  try {
+    const authUser = req.user;
+
+    if (!authUser?.id)
+      return res.status(401).json({ error: 'Usuario no autenticado' });
+
+    const { correo } = req.body;
+    if (!correo)
+      return res.status(400).json({ error: 'El correo es obligatorio' });
+
+    // 1️⃣ Obtener id_usuario desde auth_id
+    const { data: usuarioRow, error: usuarioErr } = await supabaseAdmin
+      .from('usuarios')
+      .select('id_usuario')
+      .eq('auth_id', authUser.id)
+      .maybeSingle();
+
+    if (usuarioErr) throw usuarioErr;
+    if (!usuarioRow)
+      return res.status(400).json({ error: 'Usuario no encontrado' });
+
+    // 2️⃣ Actualizar correo en tabla usuarios
+    const { error: updateBD } = await supabaseAdmin
+      .from('usuarios')
+      .update({ correo })
+      .eq('auth_id', authUser.id);
+
+    if (updateBD) throw updateBD;
+
+    // 3️⃣ Actualizar correo en Supabase Auth
+    const { error: updateAuth } = await supabaseAdmin.auth.admin.updateUserById(
+      authUser.id,
+      { email: correo }
+    );
+
+    if (updateAuth) throw updateAuth;
+
+    return res.json({ ok: true, message: 'Correo actualizado correctamente' });
+
+  } catch (err) {
+    console.error('cambiarCorreo error:', err);
+    return res.status(500).json({ error: 'Error al cambiar correo', detail: err.message });
+  }
+}
+
+/**
+ * Cambiar contraseña del usuario autenticado
+ */
+export async function cambiarContrasena(req, res) {
+  try {
+    const authUser = req.user;
+
+    if (!authUser?.email)
+      return res.status(401).json({ error: 'Usuario no autenticado' });
+
+    const { actual, nueva } = req.body;
+
+    if (!actual || !nueva)
+      return res.status(400).json({ error: 'Debe enviar contraseña actual y nueva' });
+
+    // 1️⃣ Validar contraseña actual realizando login
+    const { error: loginErr } = await supabaseAdmin.auth.signInWithPassword({
+      email: authUser.email,
+      password: actual
+    });
+
+    if (loginErr) {
+      return res.status(400).json({ error: 'La contraseña actual es incorrecta' });
+    }
+
+    // 2️⃣ Actualizar contraseña en Supabase Auth
+    const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(
+      authUser.id,
+      { password: nueva }
+    );
+
+    if (updateErr) throw updateErr;
+
+    return res.json({ ok: true, message: 'Contraseña actualizada correctamente' });
+
+  } catch (err) {
+    console.error('cambiarContrasena error:', err);
+    return res.status(500).json({
+      error: 'Error al cambiar contraseña',
+      detail: err.message
+    });
+  }
+}
