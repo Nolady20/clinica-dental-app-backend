@@ -283,52 +283,13 @@ export async function login(req, res) {
       return res.status(403).json({ error: 'Tu cuenta está desactivada' });
     }
 
-    // 3) Intentar login normal
+    // 3) Intentar login normal (ÚNICO CAMINO VÁLIDO)
     const { data: signInData, error: signInErr } = await supabaseAnon.auth.signInWithPassword({
       email: usuarioRow.correo,
       password
     });
 
-    // -----------------------------
-    // 🔥 REPARAR CONTRASEÑAS ANTIGUAS
-    // -----------------------------
-    if (signInErr?.message === "Invalid login credentials") {
-
-      console.log(`Intento de reparación de contraseña para ${usuarioRow.correo}`);
-
-      // Actualizar contraseña en Supabase Auth
-      const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(
-        usuarioRow.auth_id,
-        { password }
-      );
-
-      if (!updateErr) {
-
-        // Reintentar login con la nueva contraseña
-        const secondTry = await supabaseAnon.auth.signInWithPassword({
-          email: usuarioRow.correo,
-          password
-        });
-
-        if (!secondTry.error) {
-
-          const usuarioParaRespuesta = {
-            id_usuario: usuarioRow.id_usuario,
-            correo: usuarioRow.correo,
-            rol: usuarioRow.rol,
-            creado_en: usuarioRow.creado_en
-          };
-
-          return res.json(buildResponse(
-            { ...usuarioParaRespuesta, id: secondTry.data.user.id, email: secondTry.data.user.email },
-            secondTry.data.session,
-            paciente
-          ));
-        }
-      }
-    }
-
-    // ❌ Login falló y no se pudo reparar
+    // ❌ Login falló (SIN REPARAR, SIN CAMBIAR CONTRASEÑA)
     if (signInErr) {
       console.error("Error login:", signInErr);
       return res.status(401).json({ error: "Número de documento o contraseña inválidos" });
@@ -353,6 +314,7 @@ export async function login(req, res) {
     return res.status(500).json({ error: 'Error interno en login' });
   }
 }
+
 
 
 export async function me(req, res) {

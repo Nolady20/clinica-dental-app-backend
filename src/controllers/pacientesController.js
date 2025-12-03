@@ -1,5 +1,5 @@
 // src/controllers/pacientesController.js
-import { supabaseAdmin } from '../supabaseClient.js';
+import { supabaseAdmin, supabaseAnon } from '../supabaseClient.js';
 
 /**
  * Crear paciente (ej. hijo) y asociarlo al usuario logueado.
@@ -681,43 +681,51 @@ export async function cambiarCorreo(req, res) {
 /**
  * Cambiar contraseña del usuario autenticado
  */
+// src/controllers/pacientesController.js (o donde esté tu endpoint)
 export async function cambiarContrasena(req, res) {
   try {
     const authUser = req.user;
 
     if (!authUser?.email)
-      return res.status(401).json({ error: 'Usuario no autenticado' });
+      return res.status(401).json({ error: "Usuario no autenticado" });
 
     const { actual, nueva } = req.body;
 
     if (!actual || !nueva)
-      return res.status(400).json({ error: 'Debe enviar contraseña actual y nueva' });
+      return res.status(400).json({ error: "Debe enviar contraseña actual y nueva" });
 
-    // 1️⃣ Validar contraseña actual realizando login
-    const { error: loginErr } = await supabaseAdmin.auth.signInWithPassword({
+    // 1️⃣ Validar contraseña actual (cliente público)
+    const { error: loginErr } = await supabaseAnon.auth.signInWithPassword({
       email: authUser.email,
       password: actual
     });
 
     if (loginErr) {
-      return res.status(400).json({ error: 'La contraseña actual es incorrecta' });
+      return res.status(400).json({ error: "La contraseña actual es incorrecta" });
     }
 
-    // 2️⃣ Actualizar contraseña en Supabase Auth
+    // 2️⃣ Actualizar contraseña (cliente admin)
     const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(
       authUser.id,
       { password: nueva }
     );
 
-    if (updateErr) throw updateErr;
+    if (updateErr) {
+      return res.status(500).json({
+        error: "Error al cambiar contraseña",
+        detail: updateErr.message
+      });
+    }
 
-    return res.json({ ok: true, message: 'Contraseña actualizada correctamente' });
+    return res.json({ ok: true, message: "Contraseña actualizada correctamente" });
 
   } catch (err) {
-    console.error('cambiarContrasena error:', err);
+    console.error("cambiarContrasena error:", err);
     return res.status(500).json({
-      error: 'Error al cambiar contraseña',
+      error: "Error al cambiar contraseña",
       detail: err.message
     });
   }
 }
+
+
